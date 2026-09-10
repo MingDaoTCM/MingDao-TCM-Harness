@@ -1,0 +1,29 @@
+# —— 患者数据（敏感，绝不入库）——
+patients.json
+intake/
+sessions/
+taskstates/
+cache-stats.jsonl
+journal.jsonl
+audit.jsonl
+logs/
+session-workspaces.json
+workspaces.json
+model-cache.json
+
+# —— 凭证（绝不入库）——
+credentials.json
+.env
+*.key
+*.pem
+
+# —— 备份产物 / 运行时 ——
+*.tar.gz
+backup-to-nas.log
+node_modules/
+
+# —— 系统 / 编辑器 ——
+.DS_Store
+*.swp
+.idea/
+.vscode/
