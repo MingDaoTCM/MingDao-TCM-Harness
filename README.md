@@ -86,6 +86,29 @@ MINGDAO_HOME=~/.deyi-tcm node src/cli.js web 3821
 - 内核升级后如扩展点有变，本层适配后再跟版本；
 - **内核 bug 在上游修，本层不重复造**。
 
+## 远端仓库（三平台私有镜像）
+
+| 远端 | 仓库 | 可见性 |
+| --- | --- | --- |
+| `github` | `github.com/MingDaoTCM/Deyi-TCM-Harness` | 私有 |
+| `gitee` | `gitee.com/MingDaoTCM/Deyi-TCM-Harness` | 私有 |
+| `gitcode` | `gitcode.com/MingDaoTCM/Deyi-TCM-Harness` | 私有 |
+
+```bash
+git push github main && git push gitee main && git push gitcode main
+```
+
+**两个已知坑（都已在配置里绕开）**
+
+1. **GitHub 用独立 deploy key** —— 本账号的 `~/.ssh/mingdao_git` 是 `MingDao-Harness` 的单仓库
+   deploy key，GitHub 不允许同一公钥复用到第二个仓库（`key is already in use`）。故为 Line B
+   单配了 `~/.ssh/mingdao_deyi`，并经 `.ssh/config` 的 `Host github-deyi` 别名接入，
+   远端写作 `git@github-deyi:MingDaoTCM/Deyi-TCM-Harness.git`。
+2. **GitCode 建私有仓库必须用 JSON body** —— `POST /api/v5/user/repos` 若以
+   `application/x-www-form-urlencoded` 提交，`private=true` 会被**静默忽略**，仓库变成公开；
+   改传 JSON body `{"name":"…","private":true,"description":"…"}` 才生效。
+   PATCH 接口（`/repos/:owner/:repo`）目前**不支持**改可见性，所以必须建仓库时就设对。
+
 ## 授权与合规
 
 - 本项目为私有项目，未开源；临床使用须遵守《个人信息保护法》及互联网诊疗相关规定。
