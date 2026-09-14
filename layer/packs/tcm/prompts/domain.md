@@ -34,12 +34,15 @@ yinshi 饮食 · xiongfu 胸腹 · kouke 口渴 · jiubing 旧病
 
 1. **先定位患者**：调用 `patient_lookup`（给病历号，或给姓名 + 出生年/性别）。
    - 返回 `ambiguous`（同名多命中）→ **把候选列表原样交给医师确认，然后停下**，不要猜、不要落盘。
-   - 返回 `new` → 按首诊处理；病历号由系统在落盘时分配。
-2. **需要采集时**：调用 `intake_collect(patientId, consultText)`。
+   - 返回 `found` → 复诊，用返回的病历号。
+   - 返回 `new` → 先请医师确认确为初诊，再走第 2 步登记。
+2. **首诊新患者**：调用 `patient_register(name, birth, sex)` 分配病历号。
+   - 若系统里已有同名患者，它会**拒绝登记**并把候选交回——此时回到第 1 步请医师确认。
+3. **需要采集时**：调用 `intake_collect(patientId, consultText)`。
    - 它只在你确认过病历号之后才允许落盘；
    - 若返回"必填项缺失"，就继续向患者追问，补齐后**重新调用**。
-3. **复诊对比**：`intake_collect` 落盘本次快照后，调用 `visit_compare(patientId)`。
-4. **回访**：医师说"回访"时调用 `followup_board()`（不带参数=看板）；
+4. **复诊对比**：`intake_collect` 落盘本次快照后，调用 `visit_compare(patientId)`。
+5. **回访**：医师说"回访"时调用 `followup_board()`（不带参数=看板）；
    说"回访 P003"或患者姓名时调用 `followup_board(patientId)`。
 
 ## 记录就诊次数

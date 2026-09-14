@@ -25,7 +25,7 @@ layer/packs/tcm/
   pack.json              # manifest：apiVersion / engines / permissions / contributes
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
-  test/pack.test.mjs     # 红线与工具契约测试（21 项，含真实引擎阻断验证）
+  test/pack.test.mjs     # 34 项测试（契约 / 红线阻断 / 工具功能）
   README.md              # 本文件
 ```
 
@@ -41,15 +41,22 @@ layer/packs/tcm/
 | 工具 | 注册名 | 读/写 | 职责 |
 |---|---|---|---|
 | `patient_lookup` | `pack__tcm__patient_lookup` | 只读 | 按病历号 / 姓名+出生年+性别 定位患者；**同名多命中返回候选列表，绝不静默挑一个** |
+| `patient_register` | `pack__tcm__patient_register` | **写** | 登记新患者并分配病历号；**同名已存在时拒绝登记**，把候选交回医师 |
 | `intake_collect` | `pack__tcm__intake_collect` | **写** | 十问结构化 + 病历落盘；**必填齐全才写**，缺项回报"请继续采集" |
 | `visit_compare` | `pack__tcm__visit_compare` | 只读 | 复诊四态对比（消失/减轻/无变化/加重），只陈述事实 |
 | `followup_board` | `pack__tcm__followup_board` | 只读 | 回访看板 / 单患者时间线趋势 + 异常预警 + 随访话术草稿 |
 
-> 为什么多了 `patient_lookup`（迁移指南只列了三个工具）：
-> 原 `chat()` 里"同名多命中"那条短路**必须保留候选列表这个交互**（验收标准要求"行为不回归"）。
-> 约束引擎只能拦"没带病历号的写入"，不能产出候选列表。所以把"定位患者"单独做成一个只读工具，
-> 由约束引擎保证"没确认过病历号就写不进去"。**两层合起来比原来更强**：原来只在同名多命中时拒绝，
-> 现在是"任何没有确认病历号的写入都拒绝"。
+> 为什么比迁移指南多了两个工具（指南只列了三个）：
+>
+> **`patient_lookup`** —— 原 `chat()` 里"同名多命中"那条短路**必须保留候选列表这个交互**
+> （验收标准要求"行为不回归"）。约束引擎只能拦"没带病历号的写入"，不能产出候选列表。
+> 所以把"定位患者"单独做成只读工具，由约束引擎保证"没确认过病历号就写不进去"。
+> **两层合起来比原来更强**：原来只在同名多命中时拒绝，现在是"任何没有确认病历号的写入都拒绝"。
+>
+> **`patient_register`** —— 原 `chat()` 在调用 Dify **之前**就 `allocId` 建好了患者记录，
+> 所以采集落盘时永远有已存在的病历号可用。迁到 Pack 后如果只保留采集工具，
+> **新患者永远建不出来（首诊直接卡死）**。这个缺口是写功能测试时暴露的，不是推理出来的。
+> 登记单独成显式动作，既补上链路，又不必放松"`intake_collect` 必须带已确认病历号"这条约束。
 
 ### 约束（三条红线，内核强制，不依赖模型自觉）
 
@@ -124,7 +131,7 @@ Dify Chatflow 的 `chat-messages` 接口只返回文本，不支持 OpenAI 风�
 # ① 静态校验（下游 CI 门禁，应退出 0）
 mingdao pack verify layer/packs/tcm
 
-# ② 红线与工具契约测试（21 项；需要一份上游内核检出，测试用它的真实约束引擎）
+# ② 全部测试（34 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
 # ③ 装进一个 MINGDAO_HOME 后确认挂载
@@ -132,8 +139,28 @@ mingdao pack list
 mingdao pack info tcm
 ```
 
+测试分三层，**每层都要求断言能失败**：
+
+| 层 | 覆盖 |
+|---|---|
+| 纯函数 | `matchPatient`（含同名多命中不静默挑一个）、`missingFields`、`visitLabel`、`daysSince` |
+| 红线阻断 | 用**内核真实引擎**断言三条红线确实拦得住；并断言"该放行的放行"（带了病历号不拦、十项齐全不拦、纯事实输出不拦、既往确诊不被误伤） |
+| 工具功能 | 临时 home + 桩 llm 跑完整业务流：登记 → 首诊落盘 → 复诊落盘 → 四态对比 → 回访看板/随访；并断言**缺项时确实没有写盘**、只读工具确实没写注册表 |
+
 测试**刻意不复刻一份约束引擎**——复刻出来的断言在真引擎坏掉时照样通过，是假绿。
 `pack.test.mjs` 直接 `import` 内核的 `compileConstraints` / `checkPreTool` / `checkPostTool` / `checkOutput`。
+
+### 功能测试抓出的两个真 bug（已修）
+
+这两条都不是推理出来的，是写测试时跑出来的——**只验证"能挂载、红线能拦"是发现不了它们的**：
+
+1. **新患者永远建不出来**：`intake_collect` 要求病历号已存在，但没有任何工具会创建患者
+   （原 `chat()` 是在调用 Dify 前就 `allocId` 建好了）。首诊会直接卡死。→ 补 `patient_register`。
+2. **同一毫秒内两次落盘互相覆盖**：快照文件名是 `case-${Date.now()}.json`，
+   复诊紧跟首诊时会同名 → **复诊把首诊病历顶掉**，就诊次数与事实不符。
+   （原 `dify.mjs` 就有这个隐患，只是从没被测试碰到过。）
+   并且 `visit_compare` 按 mtime 排序，同时刻写入时**左右会颠倒**。
+   → 文件名撞名时递增时间戳；排序改按文件名里的时间戳数值。
 
 ## 七、迁移进度
 

@@ -6,6 +6,7 @@
 // 设计原则：**断言必须能失败**。每条红线都断言「确实被阻断」，而不是断言「声明了这条约束」——
 // 后者在引擎坏掉/kind 写错时照样通过，是假绿。
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -71,12 +72,13 @@ test('daysSince：无效输入返回 null 而不抛错', () => {
 });
 
 console.log('\n[2] 工具契约');
-test('四个工具齐备且声明了正确读写属性', () => {
+test('五个工具齐备且声明了正确读写属性', () => {
   const names = pack.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['followup_board', 'intake_collect', 'patient_lookup', 'visit_compare']);
+  assert.deepEqual(names, ['followup_board', 'intake_collect', 'patient_lookup', 'patient_register', 'visit_compare']);
   const ro = Object.fromEntries(pack.tools.map((t) => [t.name, t.readOnly]));
   assert.equal(ro.intake_collect, false, '落盘工具必须是写类（才进权限引擎的写判定）');
-  assert.equal(ro.patient_lookup, true);
+  assert.equal(ro.patient_register, false, '登记新患者会改注册表，必须是写类');
+  assert.equal(ro.patient_lookup, true, '定位患者不得写任何东西');
   assert.equal(ro.visit_compare, true);
   assert.equal(ro.followup_board, true);
 });
@@ -171,8 +173,136 @@ if (!KERNEL) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────
+// [5] 工具功能：用临时 home + 桩 llm 跑一遍真实业务流。
+//     这一段刻意不碰真实 MINGDAO_HOME —— 它写的是 TMP_HOME。
+// ─────────────────────────────────────────────────────────────
+console.log('\n[5] 工具功能（临时 home + 桩 llm）');
+
+const tool = (bare) => pack.tools.find((x) => x.name === bare);
+const F = {
+  zhushu: '失眠多梦三个月', zhenduan: '宫颈癌（2024 年确诊，术后）', hanre: '手足心热',
+  han: '夜间盗汗', toushen: '头晕', erbian: '小便偏黄', yinshi: '纳可',
+  xiongfu: '胸闷', kouke: '口干', jiubing: '高血压十年',
+};
+/** 桩：按 purpose 返回预设结构化结果（不联网、行为可控） */
+const stub = (replies) => ({ llm: async ({ purpose }) => ({ data: replies[purpose] ?? null }) });
+const snapshotFiles = (pid) => {
+  try { return fs.readdirSync(path.join(TMP_HOME, 'intake', pid)).filter((f) => f.endsWith('.json')); } catch { return []; }
+};
+const registry = () => JSON.parse(fs.readFileSync(path.join(TMP_HOME, 'patients.json'), 'utf8'));
+
+await testAsync('patient_lookup：空库里的一手资料 → new（不建人）', async () => {
+  const r = await tool('patient_lookup').run({ text: '患者张三，1985年生，女，失眠多梦' },
+    stub({ 'patient-extract': { id: '', name: '张三', birth: '1985', sex: '女' } }));
+  assert.equal(r.data.status, 'new');
+  assert.ok(!fs.existsSync(path.join(TMP_HOME, 'patients.json')), '只读工具不得写注册表');
+});
+
+await testAsync('intake_collect：病历号不存在 → 拒绝落盘', async () => {
+  const r = await tool('intake_collect').run({ patientId: 'P999', consultText: '主诉失眠' }, stub({}));
+  assert.equal(r.ok, false);
+  assert.equal(snapshotFiles('P999').length, 0);
+});
+
+await testAsync('patient_register：登记新患者并分配病历号 P001', async () => {
+  const r = await tool('patient_register').run({ name: '张三', birth: '1985', sex: '女' }, stub({}));
+  assert.equal(r.ok, true);
+  assert.equal(r.data.patientId, 'P001');
+  assert.equal(registry().patients.P001.name, '张三');
+});
+
+await testAsync('patient_register：同名已存在 → 拒绝重复登记（避免混病历）', async () => {
+  const r = await tool('patient_register').run({ name: '张三' }, stub({}));
+  assert.equal(r.ok, false, '同名必须拒绝登记');
+  assert.ok(String(r.error).includes('P001'), '错误里应指出已有的病历号');
+});
+
+await testAsync('intake_collect：十问缺项 → 不落盘（半份病历比没有更危险）', async () => {
+  const partial = { complete: false, ...F, han: '', toushen: '', erbian: '', yinshi: '', xiongfu: '', kouke: '', jiubing: '', hanre: '' };
+  const r = await tool('intake_collect').run({ patientId: 'P001', consultText: '主诉失眠' },
+    stub({ 'intake-extract': partial }));
+  assert.equal(snapshotFiles('P001').length, 0, '缺项时绝不能落盘');
+  assert.ok(r.data && typeof r.data === 'object', '仍要交出 data，让内核 completeness 约束再拦一次');
+  assert.equal(registry().patients.P001.visits || 0, 0, '未落盘就不得计入就诊次数');
+});
+
+await testAsync('intake_collect：十问齐全 → 落盘 + 注册表更新 + source 标记', async () => {
+  const r = await tool('intake_collect').run({ patientId: 'P001', consultText: '首诊全文' },
+    stub({ 'intake-extract': { complete: true, ...F } }));
+  assert.equal(r.ok, true);
+  assert.equal(snapshotFiles('P001').length, 1);
+  assert.ok(String(r.output).includes('已落盘'));
+  const reg = registry();
+  assert.equal(reg.patients.P001.visits, 1);
+  assert.ok(reg.patients.P001.lastVisitAt, '末次就诊时间必须更新');
+  const snap = JSON.parse(fs.readFileSync(path.join(TMP_HOME, 'intake', 'P001', snapshotFiles('P001')[0]), 'utf8'));
+  assert.equal(snap.zhenduan, F.zhenduan, '重大疾病诊断必须原样落盘');
+  assert.equal(snap.source, 'tcm-pack');
+  assert.equal(snap.patientId, 'P001');
+});
+
+await testAsync('patient_lookup：已有患者 → found，且给出本次为第 2 次就诊', async () => {
+  const r = await tool('patient_lookup').run({ name: '张三' }, stub({}));
+  assert.equal(r.data.status, 'found');
+  assert.equal(r.data.visitNo, 2);
+  assert.equal(r.data.visitLabel, '二诊');
+});
+
+await testAsync('visit_compare：只有一次就诊 → 明确说明无法对比', async () => {
+  const r = await tool('visit_compare').run({ patientId: 'P001' }, stub({}));
+  assert.equal(r.ok, true);
+  assert.ok(String(r.output).includes('无法做复诊对比'));
+});
+
+await testAsync('完整复诊：落盘第二份 → 四态对比 → 注册表 visits=2', async () => {
+  const rc = await tool('intake_collect').run({ patientId: 'P001', consultText: '复诊全文' },
+    stub({ 'intake-extract': { complete: true, ...F, han: '盗汗已止' } }));
+  assert.equal(rc.ok, true);
+  assert.equal(snapshotFiles('P001').length, 2);
+  assert.equal(registry().patients.P001.visits, 2);
+
+  const rv = await tool('visit_compare').run({ patientId: 'P001' },
+    stub({ 'visit-compare': { items: [{ label: '汗', last: '夜间盗汗', now: '盗汗已止', state: '减轻' }] } }));
+  assert.ok(String(rv.output).includes('复诊四态对比'));
+  assert.ok(String(rv.output).includes('减轻'));
+  assert.equal(rv.data.items.length, 1);
+});
+
+await testAsync('followup_board：看板列出患者与就诊次数', async () => {
+  const r = await tool('followup_board').run({}, stub({}));
+  assert.ok(String(r.output).includes('回访看板'));
+  assert.ok(String(r.output).includes('P001'));
+  assert.equal(r.data.total, 1);
+});
+
+await testAsync('followup_board：单患者随访带出趋势/预警/话术', async () => {
+  const r = await tool('followup_board').run({ patientId: 'P001' },
+    stub({ 'followup-script': { trend: '入睡时间逐次提前', alerts: ['超期未复诊'], script: '张阿姨您好…' } }));
+  assert.ok(String(r.output).includes('时间线趋势'));
+  assert.ok(String(r.output).includes('异常预警'));
+  assert.ok(String(r.output).includes('草稿·需医师确认'));
+});
+
+await testAsync('同名多命中：patient_lookup 返回候选列表、不替你挑一个', async () => {
+  await tool('patient_register').run({ name: '李四', birth: '1970', sex: '男' }, stub({}));
+  await tool('patient_register').run({ name: '李四', birth: '1990', sex: '男' }, stub({}));
+  const r = await tool('patient_lookup').run({ name: '李四' }, stub({}));
+  assert.equal(r.data.status, 'ambiguous');
+  assert.equal(r.data.candidates.length, 2);
+  assert.equal(r.data.patient, undefined, '多命中时绝不能给出单个患者');
+  assert.ok(String(r.output).includes('请确认是哪位'));
+});
+
+await testAsync('工具报错不抛异常（AI SDK 的容错约定）', async () => {
+  for (const t of pack.tools) {
+    const r = await t.run({}, stub({}));
+    assert.ok(r && typeof r === 'object', `${t.name} 必须返回对象而不是抛错`);
+  }
+});
+
 // 收尾：清掉临时 home（测试全程不写真实 MINGDAO_HOME）
-try { const fs = await import('node:fs'); fs.rmSync(TMP_HOME, { recursive: true, force: true }); } catch {}
+fs.rmSync(TMP_HOME, { recursive: true, force: true });
 
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

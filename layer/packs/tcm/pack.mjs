@@ -128,14 +128,25 @@ export function createPack(ctx) {
     return id;
   }
 
-  /** 某患者全部快照，最新在前 */
+  /**
+   * 某患者全部快照，**最新在前**。
+   * 排序刻意按文件名里的时间戳数值，而不是 mtime：
+   * 同一毫秒内写入两份时 mtime 完全相同，排序结果不确定，而 visit_compare 的
+   * 「上次 vs 本次」直接依赖这个顺序 —— 顺序错 = 对比表左右颠倒 = 事实陈述出错。
+   * 非 `case-<epoch>.json` 命名的文件回落到 mtime，保证老数据仍可读。
+   */
+  function snapshotOrder(file) {
+    const m = /^case-(\d+)\.json$/.exec(path.basename(file));
+    if (m) return Number(m[1]);
+    try { return fs.statSync(file).mtimeMs; } catch { return 0; }
+  }
   function listSnapshots(pid) {
     const dir = path.join(intakeRoot(), pid);
     try {
       return fs.readdirSync(dir)
         .filter((f) => f.endsWith('.json'))
         .map((f) => path.join(dir, f))
-        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+        .sort((a, b) => snapshotOrder(b) - snapshotOrder(a));
     } catch { return []; }
   }
 
@@ -145,7 +156,12 @@ export function createPack(ctx) {
 
   /** 落盘一份病历快照，返回文件路径 */
   function writeIntake(pid, fields, patient) {
-    const file = path.join(intakeRoot(), pid, `case-${Date.now()}.json`);
+    const dir = path.join(intakeRoot(), pid);
+    // 文件名必须唯一：`case-${Date.now()}.json` 在同一毫秒内两次落盘会**互相覆盖**，
+    // 结果是复诊把首诊病历顶掉、就诊次数与事实不符。撞名时把时间戳 +1ms 直到空位。
+    let ts = Date.now();
+    let file = path.join(dir, `case-${ts}.json`);
+    while (fs.existsSync(file)) { ts += 1; file = path.join(dir, `case-${ts}.json`); }
     writeJsonAtomic(file, {
       patientId: pid,
       patientName: patient?.name || '',
@@ -305,8 +321,55 @@ export function createPack(ctx) {
     writeJsonAtomic(registryPath(), reg);
   }
 
+  // ───────── 工具二：新患者登记（写） ─────────
+  // 为什么必须有这个工具：原 chat() 在调用 Dify **之前**就 allocId 建好了患者记录，
+  // 所以「采集落盘」永远有一个已存在的病历号可用。迁到 Pack 后如果只保留采集工具，
+  // 新患者就永远建不出来（首诊直接卡死）。登记单独成一个显式动作，
+  // 既补上这条链路，又保持「intake_collect 必须带已确认病历号」这条约束不被放松。
+  async function patientRegister(args) {
+    const name = String(args?.name || '').trim().replace(/\s+/g, '');
+    if (!name) return { ok: false, error: '缺少 name——登记新患者必须有姓名' };
+    const birth = String(args?.birth || '').replace(/[^0-9]/g, '').slice(0, 4);
+    const sex = String(args?.sex || '').trim();
+
+    const reg = loadRegistry();
+
+    // 安全闸门：同名已有患者时**拒绝登记**，把选择权交回医师。
+    // 若这里放行，就会出现「两个张三」——正是「避免混病历」要防的事。
+    const m = matchPatient(reg, { name, birth, sex });
+    if (m.ambiguous) {
+      const list = m.ambiguous
+        .map((p) => `· ${p.name}（${p.birth || '出生年未录'}年生，性别${p.sex || '未录'}，病历号 ${p.id}，末次就诊 ${String(p.lastVisitAt || '—').slice(0, 10)}）`)
+        .join('\n');
+      return {
+        ok: false,
+        error: `系统中已有 ${m.ambiguous.length} 位患者叫「${name}」，不得重复登记。请让医师确认是哪位（或补齐出生年以区分）：\n${list}`,
+      };
+    }
+    if (m.patient) {
+      return {
+        ok: false,
+        error: `患者「${name}」已存在（病历号 ${m.patient.id}），请直接使用该病历号，不要重复登记。`,
+      };
+    }
+
+    const pid = allocId(reg);
+    reg.patients[pid] = {
+      id: pid, name, birth, sex,
+      createdAt: new Date().toISOString(),
+      lastVisitAt: '',
+      visits: 0,
+    };
+    saveRegistry(reg);
+    return {
+      ok: true,
+      output: `已登记新患者：${name}${birth ? `（${birth}年生）` : ''}｜病历号 ${pid}。请用该病历号调用 intake_collect 落盘首诊病历。`,
+      data: { patientId: pid, name, birth, sex },
+    };
+  }
+
   // ───────── 工具三：复诊四态对比（读） ─────────
-  async function visitCompare(args) {
+  async function visitCompare(args, toolCtx) {
     const pid = String(args?.patientId || '').trim().toUpperCase();
     const reg = loadRegistry();
     const patient = reg.patients[pid];
@@ -320,7 +383,7 @@ export function createPack(ctx) {
     const last = readSnapshot(files[1]) || {};
     const pick = (s) => Object.fromEntries(REQUIRED_FIELDS.map((k) => [k, String(s[k] || '未提及')]));
 
-    const cmp = await llmJson(args?.__toolCtx || {}, {
+    const cmp = await llmJson(toolCtx, {
       system: '你是复诊疗效对比助手。只输出 JSON。只陈述事实，绝不出现"有效""好转""治愈"等结论。',
       user: `对比该患者上次就诊与本次就诊的逐项症状，判定四态：消失（上次有、本次无）、减轻（本次程度下降）、无变化（基本一致）、加重（本次程度上升或新增）。\n上次快照：${JSON.stringify(pick(last))}\n本次快照：${JSON.stringify(pick(now))}\n输出：{"items":[{"label":"寒热","last":"...","now":"...","state":"减轻"},...]}`,
       purpose: 'visit-compare',
@@ -434,6 +497,23 @@ export function createPack(ctx) {
         run: patientLookup,
       },
       {
+        name: 'patient_register',
+        description:
+          '登记新患者并分配病历号（写操作）。**仅在 patient_lookup 返回「new」且医师确认确为初诊时调用**。' +
+          '若系统中已有同名患者，本工具会拒绝登记并把候选交回医师确认——绝不重复建人、绝不静默合并。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '患者姓名' },
+            birth: { type: 'string', description: '出生年 4 位数字（强烈建议提供，用于区分同名）' },
+            sex: { type: 'string', description: '男 / 女' },
+          },
+          required: ['name'],
+        },
+        readOnly: false,
+        run: patientRegister,
+      },
+      {
         name: 'intake_collect',
         description:
           '十问采集与病历落盘：把本次问诊原文结构化成本次完整病历快照并写入 intake/<病历号>/。' +
@@ -461,7 +541,7 @@ export function createPack(ctx) {
           required: ['patientId'],
         },
         readOnly: true,
-        run: (args, toolCtx) => visitCompare({ ...args, __toolCtx: toolCtx }),
+        run: (args, toolCtx) => visitCompare(args, toolCtx),
       },
       {
         name: 'followup_board',
