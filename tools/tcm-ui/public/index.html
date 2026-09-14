@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>得一中医 · 问诊台</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#161b22; --panel2:#1c232c; --line:#2a323d;
+    --fg:#e6edf3; --dim:#9aa7b4; --faint:#6b7784;
+    --accent:#3fb950; --accent2:#58a6ff; --warn:#d29922; --err:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header b{font-size:15px}
+  header .tag{font-size:12px;color:var(--faint)}
+  header .sp{flex:1}
+  header .st{font-size:12px;color:var(--dim)}
+  main{display:flex;height:calc(100vh - 49px)}
+  aside{width:390px;min-width:390px;border-right:1px solid var(--line);overflow-y:auto;padding:14px;background:var(--panel)}
+  section.chat{flex:1;display:flex;flex-direction:column;min-width:0}
+  h3{margin:14px 0 8px;font-size:12.5px;color:var(--dim);text-transform:none;letter-spacing:.4px}
+  h3:first-child{margin-top:0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  label{display:block;font-size:12px;color:var(--faint);margin:0 0 3px}
+  input[type=text],input[type=number],textarea,select{
+    width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);
+    padding:7px 9px;font:13px/1.5 inherit;outline:none
+  }
+  input:focus,textarea:focus{border-color:var(--accent2)}
+  textarea{resize:vertical;min-height:52px}
+  .field{margin-bottom:9px}
+  .row{display:flex;gap:8px;margin-top:12px}
+  button{background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:8px 12px;font:13px inherit;cursor:pointer}
+  button:hover{border-color:var(--accent2)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04120a;font-weight:600}
+  button.primary:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:transparent}
+  #thumb{max-width:100%;margin-top:6px;border-radius:6px;border:1px solid var(--line);display:none}
+  .conv{flex:1;overflow-y:auto;padding:16px 18px}
+  .msg{max-width:min(860px,100%);margin:0 0 14px}
+  .msg .who{font-size:12px;color:var(--faint);margin-bottom:4px}
+  .msg.user .bubble{background:#1f6feb22;border:1px solid #1f6feb55;border-radius:10px;padding:9px 12px;white-space:pre-wrap}
+  .msg.ai .body{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px;white-space:pre-wrap}
+  .tool{border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:6px 0;font-size:12.5px}
+  .tool .head{display:flex;gap:8px;align-items:center;padding:6px 10px}
+  .tool .name{font-family:ui-monospace,Menlo,monospace;color:var(--accent2)}
+  .tool .st{margin-left:auto;color:var(--dim)}
+  .tool .st.ok{color:var(--accent)} .tool .st.bad{color:var(--err)}
+  .tool pre{margin:0;padding:0 10px 9px;white-space:pre-wrap;color:var(--dim);font:12px/1.55 ui-monospace,Menlo,monospace}
+  .banner{padding:7px 11px;border-radius:6px;background:#d2992222;border:1px solid #d2992255;color:var(--warn);font-size:12.5px;margin:0 0 10px}
+  .errline{padding:7px 11px;border-radius:6px;background:#f8514922;border:1px solid #f8514955;color:var(--err);font-size:12.5px;margin:6px 0}
+  .composer{border-top:1px solid var(--line);padding:10px 16px;background:var(--panel);display:flex;gap:8px;align-items:flex-end}
+  .composer textarea{min-height:44px;max-height:170px}
+  .hint{font-size:11.5px;color:var(--faint);padding:0 16px 10px;background:var(--panel)}
+  .spin{display:inline-block;animation:blink 1.1s infinite}
+  @keyframes blink{50%{opacity:.35}}
+</style>
+</head>
+<body>
+<header>
+  <b>得一中医 · 问诊台</b>
+  <span class="tag">独立前端 · 薄代理（内核零改动）</span>
+  <span class="sp"></span>
+  <span class="st" id="st">未连接</span>
+</header>
+
+<main>
+  <aside>
+    <h3>患者</h3>
+    <div class="grid">
+      <div><label>姓名</label><input id="pName" type="text" placeholder="张三" /></div>
+      <div><label>出生年</label><input id="pBirth" type="text" placeholder="1985" /></div>
+      <div><label>性别</label>
+        <select id="pSex"><option value="">—</option><option>男</option><option>女</option></select>
+      </div>
+      <div><label>病历号（复诊填）</label><input id="pId" type="text" placeholder="P001" /></div>
+    </div>
+
+    <h3>十问（必填 —— 缺项不会落盘，问诊工作流会继续追问）</h3>
+    <div class="field"><label>主诉（含疾病诊断 + 主要症状）</label><textarea id="f_zhushu" placeholder="失眠多梦三个月"></textarea></div>
+    <div class="field"><label>诊断 / 重大疾病（原样记录，如宫颈癌、糖尿病）</label><textarea id="f_zhenduan" placeholder="2024 年确诊为宫颈癌，术后"></textarea></div>
+    <div class="grid">
+      <div class="field"><label>寒热</label><input id="f_hanre" type="text" /></div>
+      <div class="field"><label>汗</label><input id="f_han" type="text" /></div>
+      <div class="field"><label>头身</label><input id="f_toushen" type="text" /></div>
+      <div class="field"><label>二便</label><input id="f_erbian" type="text" /></div>
+      <div class="field"><label>饮食</label><input id="f_yinshi" type="text" /></div>
+      <div class="field"><label>胸腹</label><input id="f_xiongfu" type="text" /></div>
+      <div class="field"><label>口渴</label><input id="f_kouke" type="text" /></div>
+      <div class="field"><label>旧病</label><input id="f_jiubing" type="text" /></div>
+    </div>
+
+    <h3>四诊补充（可选 —— 记录但不强制）</h3>
+    <div class="field"><label>舌象（望诊）</label><input id="f_shexiang" type="text" placeholder="舌红苔黄" /></div>
+    <div class="field">
+      <label>舌象照片（拍照或选图）</label>
+      <input id="tongue" type="file" accept="image/*" capture="environment" />
+      <img id="thumb" alt="舌象预览" />
+      <div id="tongueTip" style="font-size:11.5px;color:var(--faint);margin-top:4px"></div>
+    </div>
+    <div class="field"><label>脉象（切诊，医师指下所得）</label><input id="f_maixiang" type="text" placeholder="脉弦细" /></div>
+
+    <div class="row">
+      <button class="primary" id="compose" style="flex:1">合成问诊消息 →</button>
+      <button class="ghost" id="clearForm">清空</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--faint);margin-top:8px">
+      合成后填入右下输入框，<b>可再编辑</b>再发送 —— 不会替你做任何临床判断。
+    </div>
+  </aside>
+
+  <section class="chat">
+    <div class="conv" id="conv"></div>
+    <div class="composer">
+      <textarea id="input" placeholder="直接描述病情，或先在左侧填表后点「合成问诊消息」（Enter 发送 / Shift+Enter 换行）"></textarea>
+      <button class="primary" id="send">发送</button>
+      <button id="stop" style="display:none">停止</button>
+    </div>
+    <div class="hint" id="hint">首次发送会自动建立会话；之后同一会话保持上下文。</div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+let session = null;
+let generating = false;
+let ctrl = null;
+/** 待发送的附件（舌象照片） */
+let pendingAttachments = [];
+/** 已重放过的附件 dataUrl（合成消息里带上图片时用，避免重复） */
+let sentAttachmentNote = '';
+
+// ── 舌象照片：读成 dataUrl，作为 attachments 发给内核（内核会按当前模型是否支持视觉决定收不收）
+$('#tongue').addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0];
+  const tip = $('#tongueTip');
+  const thumb = $('#thumb');
+  pendingAttachments = [];
+  if (!f) { thumb.style.display = 'none'; tip.textContent = ''; return; }
+  if (!/^image\//.test(f.type)) { tip.textContent = '只支持图片文件'; return; }
+  const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(f); });
+  if (dataUrl.length > 5 * 1024 * 1024 * 1.4) { tip.textContent = '图片过大（内核限制单张 ≤5MB）'; return; }
+  pendingAttachments = [{ type: 'image', name: f.name || '舌象.jpg', dataUrl }];
+  thumb.src = dataUrl; thumb.style.display = 'block';
+  tip.textContent = '已附上，发送时一并交给内核（需当前模型支持视觉，否则内核会明确报错）。';
+});
+
+const FORM_FIELDS = [
+  ['zhushu', '主诉'], ['zhenduan', '诊断'], ['hanre', '寒热'], ['han', '汗'], ['toushen', '头身'],
+  ['erbian', '二便'], ['yinshi', '饮食'], ['xiongfu', '胸腹'], ['kouke', '口渴'], ['jiubing', '旧病'],
+  ['shexiang', '舌象'], ['maixiang', '脉象'],
+];
+
+/** 把表单合成一条自然语言消息（医师可再编辑）——刻意不替医师判断，只做"结构化 → 人话"的搬运 */
+$('#compose').onclick = () => {
+  const name = $('#pName').value.trim();
+  const birth = $('#pBirth').value.trim();
+  const sex = $('#pSex').value;
+  const pid = $('#pId').value.trim().toUpperCase();
+  const head = [];
+  if (name) head.push(name);
+  if (birth) head.push(birth + '年生');
+  if (sex) head.push(sex);
+  if (pid) head.push('病历号 ' + pid);
+  const isFollowUp = Boolean(pid);
+  const lines = [];
+  lines.push(head.length ? (isFollowUp ? '复诊：' : '首诊：') + head.join('，') + '。' : (isFollowUp ? '复诊。' : '首诊。'));
+  for (const [key, label] of FORM_FIELDS) {
+    const el = $('#f_' + key);
+    const v = el && el.value.trim();
+    if (v) lines.push(label + '：' + v);
+  }
+  if (isFollowUp) lines.push('（复诊：请回顾上次并逐项对比本次变化）');
+  $('#input').value = lines.join('\n');
+  $('#input').focus();
+};
+
+$('#clearForm').onclick = () => {
+  for (const [key] of FORM_FIELDS) { const el = $('#f_' + key); if (el) el.value = ''; }
+  for (const id of ['pName', 'pBirth', 'pId']) $('#' + id).value = '';
+  $('#pSex').value = '';
+  $('#tongue').value = ''; $('#thumb').style.display = 'none'; $('#tongueTip').textContent = '';
+  pendingAttachments = [];
+};
+
+// ── 对话渲染 ─────────────────────────────────────────────
+function addUser(text) {
+  const d = document.createElement('div');
+  d.className = 'msg user';
+  d.innerHTML = '<div class="who">医师</div><div class="bubble">' + esc(text) + '</div>';
+  $('#conv').appendChild(d); scroll();
+}
+function addAi() {
+  const d = document.createElement('div');
+  d.className = 'msg ai';
+  d.innerHTML = '<div class="who">问诊工作流 / 工具</div><div class="body"></div>';
+  $('#conv').appendChild(d); scroll();
+  return d.querySelector('.body');
+}
+function toolCard(name, args) {
+  const d = document.createElement('div');
+  d.className = 'tool';
+  const icon = '🔌';
+  const hint = args && (args.patientId || args.name || args.patient_name) ? esc(args.patientId || args.name || '') : '';
+  d.innerHTML = '<div class="head"><span>' + icon + '</span><span class="name">' + esc(name) + '</span><span style="color:var(--faint)">' + hint + '</span><span class="st"><span class="spin">执行中…</span></span></div>';
+  $('#conv').appendChild(d); scroll();
+  return d;
+}
+function scroll() { const c = $('#conv'); c.scrollTop = c.scrollHeight; }
+
+async function send(text, attachments) {
+  if (generating) return;
+  text = String(text || '').trim();
+  if (!text) return;
+  generating = true; $('#send').disabled = true; $('#stop').style.display = '';
+  addUser(text);
+  const ai = addAi();
+  let raw = '';
+  const toolCards = new Map();
+  ctrl = new AbortController();
+
+  const payload = { message: text };
+  if (session) payload.file = session;
+  if (attachments && attachments.length) payload.attachments = attachments;
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), signal: ctrl.signal,
+    });
+    if (!resp.ok) {
+      const j = await resp.json().catch(() => ({}));
+      ai.innerHTML = '<div class="errline">' + esc(j.error || ('HTTP ' + resp.status)) + '</div>';
+      return;
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        for (const line of block.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          handleEvent(ev, ai, (t) => { raw += t; ai.textContent = raw; scroll(); }, toolCards);
+        }
+      }
+    }
+  } catch (e) {
+    if (String(e?.name) !== 'AbortError') ai.innerHTML += '<div class="errline">连接失败：' + esc(e?.message || e) + '</div>';
+  } finally {
+    generating = false; $('#send').disabled = false; $('#stop').style.display = 'none'; ctrl = null;
+  }
+}
+
+async function handleEvent(ev, ai, pushText, toolCards) {
+  const conv = $('#conv');
+  switch (ev.type) {
+    case 'text': pushText(String(ev.delta || '')); break;
+    case 'reasoning': /* 思考内容本题材下不展开，避免干扰医师阅读 */ break;
+    case 'toolStart': {
+      const card = toolCard(ev.name, ev.args);
+      toolCards.set(ev.seq, card);
+      break;
+    }
+    case 'tool': {
+      const card = toolCards.get(ev.seq) || toolCard(ev.name, ev.args);
+      const r = ev.result || {};
+      const ok = r.ok !== false;
+      const st = card.querySelector('.st');
+      st.className = 'st ' + (ok ? 'ok' : 'bad');
+      st.textContent = (ok ? '✓' : '✖') + (ev.durationMs != null ? ' ' + ev.durationMs + 'ms' : '');
+      if (r.output) { const pre = document.createElement('pre'); pre.textContent = String(r.output).slice(0, 1500); card.appendChild(pre); }
+      if (r.error) { const pre = document.createElement('pre'); pre.style.color = 'var(--err)'; pre.textContent = String(r.error); card.appendChild(pre); }
+      scroll();
+      break;
+    }
+    case 'toolDenied': {
+      const d = document.createElement('div'); d.className = 'errline';
+      d.textContent = '✖ 工具未执行：' + (ev.reason || '未授权') + '（' + ev.name + '）';
+      conv.appendChild(d); scroll();
+      break;
+    }
+    case 'banner': {
+      const d = document.createElement('div'); d.className = 'banner'; d.textContent = ev.text || '';
+      conv.insertBefore(d, ai.closest('.msg')); scroll();
+      break;
+    }
+    case 'ask': {
+      const yes = window.confirm(ev.question || '是否允许该操作？');
+      await fetch('/api/permission', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: ev.id, answer: yes ? 'y' : 'n', taskId: ev.taskId }),
+      }).catch(() => {});
+      break;
+    }
+    case 'error': {
+      const d = document.createElement('div'); d.className = 'errline'; d.textContent = ev.message || '出错了';
+      conv.appendChild(d); scroll();
+      break;
+    }
+    case 'done': {
+      if (ev.session) { session = ev.session; $('#hint').textContent = '会话：' + session + '（后续消息沿用同一上下文）'; }
+      if (ev.note) { const d = document.createElement('div'); d.className = 'errline'; d.style.color = 'var(--warn)'; d.textContent = ev.note; conv.appendChild(d); }
+      const u = ev.usage || {};
+      if (u.completion_tokens || u.prompt_tokens) {
+        $('#st').textContent = '本轮 ' + (u.prompt_tokens || 0) + '+' + (u.completion_tokens || 0) + ' tokens'
+          + (ev.durationMs ? ' · ' + (ev.durationMs / 1000).toFixed(1) + 's' : '');
+      }
+      scroll();
+      break;
+    }
+    default: break;
+  }
+}
+
+$('#send').onclick = () => {
+  const t = $('#input').value;
+  const att = pendingAttachments.slice();
+  $('#input').value = '';
+  if (att.length) { pendingAttachments = []; $('#tongue').value = ''; $('#thumb').style.display = 'none'; $('#tongueTip').textContent = ''; }
+  send(t, att);
+};
+$('#stop').onclick = () => { try { ctrl?.abort(); } catch {} fetch('/api/abort', { method: 'POST' }).catch(() => {}); };
+$('#input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#send').click(); }
+});
+
+// 启动自检：确认薄代理后面确实有内核
+fetch('/api/state').then((r) => r.ok ? $('#st').textContent = '内核已连接' : $('#st').textContent = '内核异常 ' + r.status)
+  .catch(() => { $('#st').textContent = '内核不可达'; });
+</script>
+</body>
+</html>

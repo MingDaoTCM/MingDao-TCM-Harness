@@ -25,10 +25,27 @@ export const FIELDS = {
   zhenduan: '诊断/重大疾病（西医诊断：癌症、肿瘤、糖尿病、心脏病等，必须原样记录，绝不允许省略）',
   hanre: '寒热', han: '汗', toushen: '头身', erbian: '二便',
   yinshi: '饮食', xiongfu: '胸腹', kouke: '口渴', jiubing: '旧病',
+  shexiang: '舌象（望诊，可选）',
+  maixiang: '脉象（切诊，可选）',
 };
 
-/** completeness 约束校验的必填字段（顺序即提示词顺序） */
-export const REQUIRED_FIELDS = Object.keys(FIELDS);
+/**
+ * 必填（`completeness` 红线校验的字段）—— 十问。
+ * 舌象/脉象刻意**不在**必填里：脉象是医师指下感觉、舌象依赖拍照条件，
+ * 强制作必填会让基层场景无法落盘病历（宁可少记，不可挡住记录）。
+ */
+export const REQUIRED_FIELDS = ['zhushu', 'zhenduan', 'hanre', 'han', 'toushen', 'erbian', 'yinshi', 'xiongfu', 'kouke', 'jiubing'];
+
+/**
+ * 可选字段：**记录但不强制**。
+ * 为什么要有它们：中医四诊是望闻问切，此前十个字段全来自"问"，
+ * 医师写下的舌象/脉象在结构化时**无处可放、直接被丢掉** —— 那是实打实的信息损失。
+ * 注意：复诊四态对比会把它们一并纳入（有则比、无则跳过），因为它们正是辨证的关键依据。
+ */
+export const OPTIONAL_FIELDS = ['shexiang', 'maixiang'];
+
+/** 全部会落盘的字段（必填在前，可选在后） */
+export const ALL_FIELDS = [...REQUIRED_FIELDS, ...OPTIONAL_FIELDS];
 
 /** 复诊四态（顺序固定，供提示词与渲染共用） */
 export const FOUR_STATES = ['消失', '减轻', '无变化', '加重'];
@@ -71,7 +88,7 @@ export function matchPatient(registry, info = {}) {
 /** 从模型返回的 JSON 里挑出十个字段（缺失一律空串，绝不编造） */
 export function normalizeFields(raw) {
   const out = /** @type {Record<string,string>} */ ({});
-  for (const k of REQUIRED_FIELDS) out[k] = String(raw?.[k] ?? '').trim();
+  for (const k of ALL_FIELDS) out[k] = String(raw?.[k] ?? '').trim();
   return out;
 }
 
@@ -278,11 +295,23 @@ export function createPack(ctx) {
     }
     if (m.patient) {
       const p = m.patient;
-      const visits = listSnapshots(p.id).length;
+      const snaps = listSnapshots(p.id);
+      const visits = snaps.length;
+      // lastSnapshot：把「上一次病历」一并交出去。
+      // 为什么放在工具结果里：路线 A 下 Dify 仍负责产出临床正文，而 Dify 看不到我们的会话，
+      // 它必须收到「本次第几诊 + 上次病历摘要」才能正确回顾对比（否则会重演「四诊标题矛盾」）。
+      // 内核把整个结果（含 data）序列化进消息上下文，provider 因此能取回它 —— 见 dify.mjs 的 visitContext()。
+      const last = visits ? readSnapshot(snaps[0]) : null;
+      const lastSnapshot = last ? Object.fromEntries(ALL_FIELDS.map((k) => [k, String(last[k] || '')])) : null;
       return {
         ok: true,
         output: `已定位患者：${p.name}${p.birth ? `（${p.birth}年生）` : ''}｜病历号 ${p.id}｜性别 ${p.sex || '未录'}｜已有 ${visits} 次就诊记录｜末次就诊 ${String(p.lastVisitAt || '—').slice(0, 10)}。本次为第 ${visits + 1} 次就诊（${visitLabel(visits + 1)}）。`,
-        data: { status: 'found', patient: { id: p.id, name: p.name, birth: p.birth, sex: p.sex, lastVisitAt: p.lastVisitAt }, visits, visitNo: visits + 1, visitLabel: visitLabel(visits + 1) },
+        data: {
+          status: 'found',
+          patient: { id: p.id, name: p.name, birth: p.birth, sex: p.sex, lastVisitAt: p.lastVisitAt },
+          visits, visitNo: visits + 1, visitLabel: visitLabel(visits + 1),
+          lastSnapshot,
+        },
       };
     }
     if (m.isNew) {
@@ -322,10 +351,11 @@ export function createPack(ctx) {
     const prevSnapshot = prevFiles.length ? readSnapshot(prevFiles[0]) : null;
     const visitNo = prevFiles.length + 1;
 
-    const fieldList = 'zhushu主诉、zhenduan诊断(重大疾病如癌症/肿瘤/糖尿病/心脏病，必须原样保留，绝不省略或概括)、hanre寒热、han汗、toushen头身、erbian二便、yinshi饮食、xiongfu胸腹、kouke口渴、jiubing旧病';
+    const fieldList = 'zhushu主诉、zhenduan诊断(重大疾病如癌症/肿瘤/糖尿病/心脏病，必须原样保留，绝不省略或概括)、hanre寒热、han汗、toushen头身、erbian二便、yinshi饮食、xiongfu胸腹、kouke口渴、jiubing旧病'
+      + '；**可选两项**（有就原样记、没有就留空，**不计入 missing、不影响 complete**）：shexiang舌象（如"舌红苔黄"；若医师上传了舌象照片，可写"[舌象照片见附件]"并保留医师的文字描述）、maixiang脉象（医师指下所得，如"脉弦细"）';
     const extractUser = prevSnapshot
-      ? `已知该患者上次快照：${JSON.stringify(Object.fromEntries(REQUIRED_FIELDS.map((k) => [k, String(prevSnapshot[k] || '未提及')])))}。结合患者的复诊消息，生成本次完整快照：本次未变的项沿用上次表述，本次明确变化的项用新表述（如"睡眠好多了"）。字段：${fieldList}。输出 {"complete":true,...}；若仍缺关键项返回 {"complete":false,"missing":[...]}。缺项绝不编造。\n\n患者复诊消息：\n${consultText}`
-      : `从下面问诊对话提取中医问诊字段。字段：${fieldList}。规则：① 对话中提及的任何疾病诊断（如宫颈癌）必须原样填入 zhenduan，绝不允许过滤；② 任一必填项未明确出现就返回 {"complete":false,"missing":[...]}；齐全才返回 {"complete":true,...}；③ 缺项绝不编造。\n\n对话：\n${consultText}`;
+      ? `已知该患者上次快照：${JSON.stringify(Object.fromEntries(ALL_FIELDS.map((k) => [k, String(prevSnapshot[k] || '未提及')])))}。结合患者的复诊消息，生成本次完整快照：本次未变的项沿用上次表述，本次明确变化的项用新表述（如"睡眠好多了"）。字段：${fieldList}。输出 {"complete":true,...}；若仍缺**必填**项返回 {"complete":false,"missing":[...]}。缺项绝不编造。\n\n患者复诊消息：\n${consultText}`
+      : `从下面问诊对话提取中医问诊字段。字段：${fieldList}。规则：① 对话中提及的任何疾病诊断（如宫颈癌）必须原样填入 zhenduan，绝不允许过滤；② 任一**必填**项未明确出现就返回 {"complete":false,"missing":[...]}；必填齐全才返回 {"complete":true,...}；③ 缺项绝不编造；④ 舌象/脉象是可选，采集到就填、没采集到就留空。\n\n对话：\n${consultText}`;
 
     const extracted = await llmJson(toolCtx, {
       system: '你是病历结构化提取器。只输出一个 JSON 对象。',
@@ -429,7 +459,7 @@ export function createPack(ctx) {
     }
     const now = readSnapshot(files[0]) || {};
     const last = readSnapshot(files[1]) || {};
-    const pick = (s) => Object.fromEntries(REQUIRED_FIELDS.map((k) => [k, String(s[k] || '未提及')]));
+    const pick = (s) => Object.fromEntries(ALL_FIELDS.map((k) => [k, String(s[k] || '未提及')]));
 
     const cmp = await llmJson(toolCtx, {
       system: '你是复诊疗效对比助手。只输出 JSON。只陈述事实，绝不出现"有效""好转""治愈"等结论。',
@@ -517,9 +547,9 @@ export function createPack(ctx) {
 
   /** 快照 → 中文字段（随访时间线用） */
   function pickFieldsCn(d) {
-    const CN = { zhushu: '主诉', zhenduan: '诊断', hanre: '寒热', han: '汗', toushen: '头身', erbian: '二便', yinshi: '饮食', xiongfu: '胸腹', kouke: '口渴', jiubing: '旧病' };
+    const CN = { zhushu: '主诉', zhenduan: '诊断', hanre: '寒热', han: '汗', toushen: '头身', erbian: '二便', yinshi: '饮食', xiongfu: '胸腹', kouke: '口渴', jiubing: '旧病', shexiang: '舌象', maixiang: '脉象' };
     const out = /** @type {Record<string,any>} */ ({});
-    for (const k of REQUIRED_FIELDS) out[CN[k]] = d[k];
+    for (const k of ALL_FIELDS) out[CN[k]] = d[k];
     return out;
   }
 

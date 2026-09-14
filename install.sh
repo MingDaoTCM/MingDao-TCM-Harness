@@ -31,7 +31,7 @@ fi
 #    当前中医问诊仍由 providers/dify.mjs 的 chat() 驱动。Pack 里的域工具要被真正调用，
 #    取决于「谁驱动问诊」的架构决策 —— 见 layer/packs/tcm/README.md 的「待决策」一节。
 cp "$HERE/layer/providers/"*.mjs "$HOME_DIR/providers/"
-echo "   ✓ 已安装 Provider: $(ls -1 "$HERE/layer/providers/" | tr '\n' ' ')"
+echo "   ✓ 已安装 Provider: $(cd "$HERE/layer/providers" && ls -1 *.mjs | tr '\n' ' ')"
 
 # 3b) 装上 Pack 不是零影响，必须当场说清楚（否则会以为"没接线就等于没装"）
 if [ -d "$HOME_DIR/packs/tcm" ]; then

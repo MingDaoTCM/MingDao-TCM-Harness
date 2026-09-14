@@ -1,8 +1,10 @@
 {
   "provider": "dify",
   "model": "dify-chatflow",
-  "baseUrl": "https://dify.mingdaotcm.cn",
   "permission": "auto",
   "sandbox": "off",
-  "contextBudget": 32000
+  "contextBudget": 32000,
+  "tcm": {
+    "difyBaseUrl": "https://dify.mingdaotcm.cn"
+  }
 }

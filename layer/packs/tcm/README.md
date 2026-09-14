@@ -123,6 +123,24 @@ Dify Chatflow 的 `chat-messages` 接口只返回文本，不支持 OpenAI 风�
 
 > 两条路线下 **Pack 本身完全一样**（本目录不用改），差别只在 `dify.mjs` 怎么接线。
 
+### 4.0 已定：走路线 A（用户 2026-09-14 决定）
+
+```js
+// dify.mjs 的 chat()：两段
+① 只把 pack__* 工具交给编排器，问它「这一轮要不要调工具」
+   ├─ 要 → 返回 toolCalls，交回内核执行（患者定位/登记/落盘/对比/回访）
+   └─ 不要 → 走 ②
+② Dify 流式问诊 —— 这段正文成为 provider 的 res.text，
+   因此**逐字呈现**且**受内核输出红线约束**（这正是选 A 而不是 B 的核心理由）
+```
+
+**编排器只看到垂域工具**，不给 `read`/`write`/`ls`/`bash` 这些通用工具。
+理由（实测踩到）：一开始把内核给的全部工具都转给编排器，医师只说了一句「回访」，
+编排器却去 `read`/`ls` 翻代码库、白烧几步。断言 ⑨⑩ 已把这条锁死。
+
+**编排模型可切本地小模型**（`config.tcm.orchestrator`），不配则默认 `deepseek-v4-flash`。
+`thinking` 是 DeepSeek 专有参数，只在 DeepSeek 端点发送（本地 OpenAI 兼容服务收到会 400）。
+
 ### 4.1 两条路线的具体改动面（供评估代码，不是抽象选项）
 
 **共同前提**：无论 A/B，`dify.mjs` 里那份患者注册表/快照读写都必须删掉
@@ -220,6 +238,37 @@ async chat(opts) {
 > 不要在下游 fork 内核」。上面这几条建议反馈回去——尤其 **Pack 工具无法被 Dify 类 Provider 触发**
 > 这一条，它不在指南的覆盖范围内。
 
+### 5.2 真实接线时又踩到的三个上游缺口（都在生产实例上复现过）
+
+这三条不是读代码读出来的，是**把路线 A 接上去实跑**才暴露的，且都被下游绕开了：
+
+| # | 现象 | 根因（已定位到行） | 下游如何绕开 |
+|---|---|---|---|
+| 1 | `ctx.llm({model:'deepseek-v4-flash'})` 报 **`[deepseek-v4-flash] 响应解析失败`** | `src/providers/index.js` 的 `resolveProviderConfig`：`baseUrl = cfg.baseUrl \|\| <目标模型服务商预设>.baseUrl` —— **顶层 `baseUrl` 会压过目标模型自己服务商的地址**。而顶层 `baseUrl` 是给「当前 provider」用的（Dify），于是带着 DeepSeek 的 key 打到了 Dify 域名 | **`config.json` 不写顶层 `baseUrl`**；Dify 地址由 `dify.mjs` 自己兜底（`pc.baseUrl → config.tcm.difyBaseUrl → 默认值`）。见 §5.3 |
+| 2 | 医师只说「回访」时，Pack 工具**完全不在选项里** | `src/agent.js` 的 `toolsFor()`：只读阶段只放行 `READONLY_TIER_SET`（硬编码内置名）、已用过的工具、以及 MCP —— **`isRegisteredToolReadonly()` 明明存在却没被用**，于是 `readOnly:true` 的 Pack 工具被一并挡掉 | 无解（下游无法添加内核没给的工具）。**必须上游修**：只读阶段应改用 `isRegisteredToolReadonly(n)` |
+| 3 | 编排器收到全部工具后 **去 `read`/`ls` 翻代码库** | 不是内核缺陷，是接线方的设计失误：`provider.chat()` 收到的 `tools` 含全部内置工具 | `dify.mjs` 只把 `pack__*` 前缀的工具交给编排器（见 §4.2）。已加断言 ⑨⑩ 锁死 |
+
+> 第 2 条影响面最大：**任何"只读意图"的指令（回访、查病历、看趋势）都触发不了 Pack 工具**，
+> 而这类指令恰恰是中医随访场景的高频入口。上游若不修，路线 A 就只能覆盖"带写意图"的指令。
+
+### 5.3 一条必须遵守的配置约定
+
+`config.json` **不要写顶层 `baseUrl`**。Dify 的地址写在 `tcm.difyBaseUrl`：
+
+```jsonc
+{
+  "provider": "dify",
+  "model": "dify-chatflow",
+  // 不要在这里写 "baseUrl": "https://dify..."   ← 会让域内 ctx.llm 调用打错端点
+  "tcm": { "difyBaseUrl": "https://dify.mingdaotcm.cn" }
+}
+```
+
+另外 `PACK-API.md §3` 写「`data` 不进模型上下文，仅供 UI/约束」，实测**不符**：
+`src/agent.js` 是 `JSON.stringify(result)` 整条写回消息，`data` 一样进上下文。
+本 Pack 正好利用了这一点 —— `patient_lookup` 把「本次第几诊 + 上次病历」放进 `data`，
+Provider 再从中取回、拼进 Dify 的 query（否则会重演「四诊标题矛盾」）。
+
 ## 六、怎么验证
 
 ```bash
@@ -303,9 +352,9 @@ mingdao pack info tcm
 | | 状态 |
 |---|---|
 | ① | ✅ 退出 0（5 工具 / 4 约束 / 1 提示词段） |
-| ② | 🟡 **机制已验证**：集成测试用桩 provider 证明「工具 → `ctx.llm` → 归因记录」这条链是通的；**生产环境能否触发工具取决于 §四 的架构决策** |
+| ② | ✅ **已在生产实例验证**：`mingdao cost --by pack` 显示 `tcm 1 次调用 261+269 tokens ≈¥0.00160`（用真实患者数据跑出来的） |
 | ③ | ✅ 三层验证：单测用内核真实引擎逐条断言（含"该放行的放行"）；端到端在**真实 agent** 里验证输出红线会改写违规正文并写审计。注：`output-forbid` 与 provider 无关，**装上 Pack 即已生效**（见 §二 的警告） |
-| ④ | 🟡 **机制已验证**（§5.1：卡片按 `ev.name`/`ev.args` 通用渲染，结果兜底分支正是 `{ok,output}`）；出现卡片仍需真实 `tool_calls` → 依赖 §四 |
+| ④ | ✅ **已在生产实例验证**：SSE 里出现 `toolStart pack__tcm__followup_board` + `tool`（成功、带 output），走的正是 §5.1 核对的通用卡片路径 |
 | ⑤ | ✅ 单测 + 功能测试双层覆盖（`patient_lookup` 返回候选、`patient_register` 拒绝重复登记） |
 | ⑥ | ✅ 全程只动 `layer/`，上游源码零改动 |
 

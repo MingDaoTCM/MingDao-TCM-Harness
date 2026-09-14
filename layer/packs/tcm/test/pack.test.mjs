@@ -395,6 +395,39 @@ await testAsync('缺项补齐后可正常落盘（不因一次缺项就永久卡
   assert.equal(fs.readdirSync(file(path.join('intake', 'P001'))).filter((f) => f.endsWith('.json')).length, 1);
 });
 
+await testAsync('可选字段（舌象/脉象）：采集到就落盘，缺了**不影响**落盘', async () => {
+  const p = freshPack();
+  await p.tools.find((t) => t.name === 'patient_register').run({ name: '王五' }, {});
+  // ① 必填齐全但**没有**舌象/脉象 → 必须照样落盘（否则基层场景记不了病历）
+  const r1 = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '首诊' },
+    { llm: async () => ({ data: { complete: true, ...F } }) });
+  assert.equal(r1.ok, true, '可选字段缺失不得挡住落盘');
+  const f1 = fs.readdirSync(file(path.join('intake', 'P001'))).filter((x) => x.endsWith('.json'));
+  assert.equal(f1.length, 1);
+  const s1 = JSON.parse(fs.readFileSync(file(path.join('intake', 'P001', f1[0])), 'utf8'));
+  assert.equal(s1.shexiang, '', '未采集到就留空串，不得编造');
+  assert.equal(s1.maixiang, '');
+
+  // ② 采集到舌象/脉象 → 必须原样落盘（此前这两个字段无处可放，直接被丢掉）
+  const r2 = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '复诊' },
+    { llm: async () => ({ data: { complete: true, ...F, shexiang: '舌红苔黄', maixiang: '脉弦细' } }) });
+  assert.equal(r2.ok, true);
+  const f2 = fs.readdirSync(file(path.join('intake', 'P001'))).filter((x) => x.endsWith('.json')).sort();
+  const latest = JSON.parse(fs.readFileSync(file(path.join('intake', 'P001', f2[f2.length - 1])), 'utf8'));
+  assert.equal(latest.shexiang, '舌红苔黄');
+  assert.equal(latest.maixiang, '脉弦细');
+});
+
+await testAsync('completeness 红线只看必填十项，不因可选字段缺失而拒绝', async () => {
+  const c = pack.constraints.find((x) => x.kind === 'completeness');
+  assert.equal(c.fields.length, 10);
+  assert.ok(!c.fields.includes('shexiang'), '舌象不得进必填');
+  assert.ok(!c.fields.includes('maixiang'), '脉象不得进必填');
+  const partial = Object.fromEntries(c.fields.map((k) => [k, '']));
+  partial.shexiang = '舌红苔黄';
+  assert.ok(missingFields(partial).length === 10, '只有可选字段填了，必填仍应全部算缺');
+});
+
 // 收尾：清掉临时 home（测试全程不写真实 MINGDAO_HOME）
 fs.rmSync(TMP_HOME, { recursive: true, force: true });
 fs.rmSync(HOME2, { recursive: true, force: true });
