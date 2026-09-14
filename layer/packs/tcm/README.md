@@ -107,6 +107,63 @@ Dify Chatflow 的 `chat-messages` 接口只返回文本，不支持 OpenAI 风�
 
 > 两条路线下 **Pack 本身完全一样**（本目录不用改），差别只在 `dify.mjs` 怎么接线。
 
+### 4.1 两条路线的具体改动面（供评估代码，不是抽象选项）
+
+**共同前提**：无论 A/B，`dify.mjs` 里那份患者注册表/快照读写都必须删掉
+（否则两套实现各写一份 `patients.json`，见 §八）。
+
+#### 路线 A —— Dify 继续主问诊：`chat()` 改成两段
+
+```js
+async chat(opts) {
+  // ① 先让 DeepSeek 带 tools 判一次：这一轮该不该调工具？
+  const decided = await decideWithTools(opts.messages, opts.tools, opts.signal); // 新增 ~40 行
+  if (decided.toolCalls?.length) {
+    return { text: '', toolCalls: decided.toolCalls, usage: decided.usage, finish: 'tool_calls' };
+  }
+  // ② 不调工具 → 走原来的 Dify 流式问诊（现有代码**原样不动**）
+  //    ③ 域逻辑（患者注册表 / 十问提取 / 四态对比 / 回访）全部删除，已迁到 Pack
+}
+```
+
+| | |
+|---|---|
+| 改动量 | `dify.mjs` 新增约 40 行（带 tools 的 DeepSeek 调用 + 判定）；删除约 200 行域逻辑 |
+| 成本 | **每回合多一次 DeepSeek 调用**（tools 约 5 个 → 输入 1～2k token，输出几十 token） |
+| 医师体验 | 不变（Dify 仍流式驱动问诊） |
+| 归因 | 这次「判定」调用发生在 Provider 里、**不计入 pack** —— 它是编排成本、不是域成本，这是对的 |
+| 风险 | 判定漏判（该调工具却没调）时要能看出来，需要给这次调用一个可观测的落点 |
+
+#### 路线 B —— DeepSeek 主问诊：Dify 降为 Pack 内的一个工具
+
+```js
+// pack.mjs 新增第 6 个工具
+{
+  name: 'tcm_consult',
+  description: '调用中医知识工作流（Dify）完成一次问诊应答；已带该患者的上一次病历上下文。',
+  parameters: { type:'object', properties:{
+    patientId: { type:'string' }, query: { type:'string' } }, required: ['query'] },
+  readOnly: true,
+  async run(args, toolCtx) {
+    // 大部分代码是从现在 dify.mjs 的流式解析搬过来的；
+    // 可用 toolCtx.io.writeText 边收边显示（工具 ctx 上确实有 io）
+  },
+}
+```
+
+| | |
+|---|---|
+| 改动量 | Pack 新增 1 个工具（约 60 行，主要是从 `dify.mjs` 搬来的 SSE 解析）；`dify.mjs` 从 Provider 降级为 Pack 内的一段代码 |
+| 配置 | `config.json` 的 `provider` 改为 `deepseek`；`$MINGDAO_HOME/providers/dify.mjs` 不再作为 Provider 加载 |
+| 成本 | **无额外调用**（DeepSeek 直接就是 agent 的模型） |
+| 医师体验 | 问诊对话改由 DeepSeek 驱动；Dify 变成"调一次拿一段知识" |
+| ⚠ 需要先解决 | 现在 `conversation_id` 是 **Provider 单例持有的一个变量**（`let conversationId = ''`），改成工具后必须**按患者隔离**，否则张三和李四的 Dify 会话会串。这是 B 路线必须先想清楚的一点 |
+| 与既有原则 | 更贴合你 README 里写的「Dify 管知识，Harness 管流程」 |
+
+> 一句话取舍：**要"问诊对话本身保持现在的水准"→ A**；
+> **要"DeepSeek 编排、能做多步推理（先查病历 → 再决定问什么 → 再落盘）"→ B**，
+> 但得先把上面那条 `conversation_id` 按患者隔离定下来。
+
 ## 五、与上游契约文档的出入（已按 v0.6.2 真实代码核对）
 
 迁移指南与 `PACK-API.md` 有几处与实现不一致。**以下是核对结果，不是推测**：
