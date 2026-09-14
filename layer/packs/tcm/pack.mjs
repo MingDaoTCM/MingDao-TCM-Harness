@@ -111,19 +111,63 @@ export function createPack(ctx) {
     fs.renameSync(tmp, file);
   }
 
+  /**
+   * 读患者注册表。
+   *
+   * ⚠ 这里刻意**不**把「文件存在但读不出来」降级成空注册表。
+   * 空注册表会让 allocId 从 P001 重新发号，而 P001 的病历快照可能还躺在 intake/P001/ 里
+   * —— 结果是**两个不同患者共用一个病历号**，正是三条红线要防的串病历，
+   * 而且它静默发生（返回 ok:true，没有任何告警）。
+   * 损坏（断电半写、手工编辑出错、磁盘故障）时必须**大声失败**：
+   * 宁可拒绝服务，也不能发错号 —— 发错号是不可逆的，拒绝服务是可恢复的。
+   * 只有「文件根本不存在」（全新 home）才允许从 P001 开始。
+   */
   function loadRegistry() {
+    const p = registryPath();
+    if (!fs.existsSync(p)) return { nextId: 1, patients: {} };
+    let raw;
     try {
-      const r = JSON.parse(fs.readFileSync(registryPath(), 'utf8'));
-      if (r && typeof r === 'object' && r.patients) return r;
-    } catch {}
-    return { nextId: 1, patients: {} };
+      raw = fs.readFileSync(p, 'utf8');
+    } catch (e) {
+      throw new Error(`患者注册表无法读取（${p}）：${e?.message || e}。为避免病历号冲突/串病历，已停止操作——请先修复或从备份恢复该文件。`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`患者注册表 JSON 已损坏（${p}）：${e?.message || e}。为避免病历号冲突/串病历，已停止操作——请先修复或从备份恢复该文件。`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.patients || typeof parsed.patients !== 'object' || Array.isArray(parsed.patients)) {
+      throw new Error(`患者注册表结构不符（${p}）：期望形如 {"nextId":1,"patients":{}}。为避免病历号冲突/串病历，已停止操作。`);
+    }
+    return parsed;
   }
 
+  /**
+   * 把 loadRegistry 的异常收敛成工具统一的 `{ok:false, error}` 形状。
+   * 底层仍**抛异常**（这样将来任何忘记处理的调用点都会 fail-closed，而不是拿着 undefined 继续跑），
+   * 这里只负责在工具边界转成正常返回值——避免同一个 Pack 里「有的错返回、有的错抛异常」两种风格。
+   */
+  function tryRegistry() {
+    try {
+      return { reg: loadRegistry() };
+    } catch (e) {
+      return { error: { ok: false, error: String(e?.message || e) } };
+    }
+  }
+
+  /**
+   * 分配病历号。双保险：除了注册表自身的 nextId，还跳过**盘上已有 intake/<id>/ 目录**的号。
+   * 注册表被回滚、被替换、或 nextId 被外部改小时，这一步能独立挡住
+   * 「把已有病历的号再发给另一个患者」——不依赖注册表自身是否完好。
+   */
   function allocId(reg) {
-    // 防御：nextId 被外部改坏时不会分配出重复病历号
     let n = Number(reg.nextId) || 1;
     let id = `P${String(n).padStart(3, '0')}`;
-    while (reg.patients[id]) { n += 1; id = `P${String(n).padStart(3, '0')}`; }
+    while (reg.patients[id] || fs.existsSync(path.join(intakeRoot(), id))) {
+      n += 1;
+      id = `P${String(n).padStart(3, '0')}`;
+    }
     reg.nextId = n + 1;
     return id;
   }
@@ -202,7 +246,8 @@ export function createPack(ctx) {
 
   // ───────── 工具一：患者定位（读） ─────────
   async function patientLookup(args, toolCtx) {
-    const reg = loadRegistry();
+    const { reg, error } = tryRegistry();
+    if (error) return error;
     const info = { id: args?.id, name: args?.name, birth: args?.birth, sex: args?.sex };
 
     // 未给任何线索时，可直接用 DeepSeek 从「本次问诊原文」里抽身份（与原 chat() 行为一致）
@@ -260,7 +305,8 @@ export function createPack(ctx) {
     // 兜底校验（约束引擎之外的第二层）：没有确认过的病历号一律不写
     if (!pidRaw) return { ok: false, error: '缺少 patientId——请先用 patient_lookup 确认患者，拿到病历号后再落盘（避免混病历）' };
 
-    const reg = loadRegistry();
+    const { reg, error } = tryRegistry();
+    if (error) return error;
     const patient = reg.patients[pidRaw];
     if (!patient) {
       return {
@@ -332,7 +378,8 @@ export function createPack(ctx) {
     const birth = String(args?.birth || '').replace(/[^0-9]/g, '').slice(0, 4);
     const sex = String(args?.sex || '').trim();
 
-    const reg = loadRegistry();
+    const { reg, error } = tryRegistry();
+    if (error) return error;
 
     // 安全闸门：同名已有患者时**拒绝登记**，把选择权交回医师。
     // 若这里放行，就会出现「两个张三」——正是「避免混病历」要防的事。
@@ -371,7 +418,8 @@ export function createPack(ctx) {
   // ───────── 工具三：复诊四态对比（读） ─────────
   async function visitCompare(args, toolCtx) {
     const pid = String(args?.patientId || '').trim().toUpperCase();
-    const reg = loadRegistry();
+    const { reg, error } = tryRegistry();
+    if (error) return error;
     const patient = reg.patients[pid];
     if (!patient) return { ok: false, error: `病历号 ${pid} 不存在。` };
 
@@ -403,7 +451,8 @@ export function createPack(ctx) {
   // ───────── 工具四：回访看板 / 单患者随访（读） ─────────
   async function followupBoard(args, toolCtx) {
     const target = String(args?.patientId || args?.target || '').trim();
-    const reg = loadRegistry();
+    const { reg, error } = tryRegistry();
+    if (error) return error;
 
     if (!target) {
       const rows = Object.values(reg.patients).map((p) => {

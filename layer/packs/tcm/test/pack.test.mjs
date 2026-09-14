@@ -301,8 +301,103 @@ await testAsync('工具报错不抛异常（AI SDK 的容错约定）', async ()
   }
 });
 
+// ─────────────────────────────────────────────────────────────
+// [6] 错误路径：患者数据是医疗记录，「失败」必须比「静默给错结果」优先。
+// ─────────────────────────────────────────────────────────────
+console.log('\n[6] 错误路径与降级（独立临时 home）');
+
+const HOME2 = path.join(process.env.TMPDIR || '/tmp', `tcm-err-test-${process.pid}`);
+const freshPack = () => {
+  fs.rmSync(HOME2, { recursive: true, force: true });
+  fs.mkdirSync(HOME2, { recursive: true });
+  return createPack({ home: HOME2, packDir: PACK_DIR, packName: 'tcm', log: () => {} });
+};
+const file = (p) => path.join(HOME2, p);
+const seedSnapshot = (pid) => {
+  fs.mkdirSync(file(path.join('intake', pid)), { recursive: true });
+  fs.writeFileSync(file(path.join('intake', pid, 'case-1.json')), JSON.stringify({ patientId: pid, zhushu: '旧患者主诉' }));
+};
+
+await testAsync('注册表根本不存在 → 正常（全新 home 应从 P001 开始）', async () => {
+  const p = freshPack();
+  const r = await p.tools.find((t) => t.name === 'patient_register').run({ name: '首位患者' }, {});
+  assert.equal(r.ok, true);
+  assert.equal(r.data.patientId, 'P001');
+});
+
+await testAsync('★ 注册表 JSON 损坏 → 拒绝操作，绝不静默从 P001 重新发号', async () => {
+  const p = freshPack();
+  seedSnapshot('P001'); // 盘上已有 P001 的病历
+  fs.writeFileSync(file('patients.json'), '{"nextId":2,"patients":{"P001":{"id":"P001","na'); // 半写/截断
+  const r = await p.tools.find((t) => t.name === 'patient_register').run({ name: '新患者', birth: '1990', sex: '男' }, {});
+  assert.notEqual(r.ok, true, '注册表损坏时绝不能报成功');
+  assert.ok(/损坏|无法读取|结构不符/.test(String(r.error)), `错误应说明原因，实际：${r.error}`);
+  assert.ok(/备份|修复/.test(String(r.error)), '错误应给出可操作的建议');
+  assert.equal(r.data, undefined, '不得返回任何病历号');
+});
+
+await testAsync('★ 注册表损坏时只读工具同样拒绝（不把「读不出来」伪装成「没有患者」）', async () => {
+  const p = freshPack();
+  seedSnapshot('P001');
+  fs.writeFileSync(file('patients.json'), 'not json at all');
+  const r = await p.tools.find((t) => t.name === 'followup_board').run({}, {});
+  assert.notEqual(r.ok, true, '看板不能显示成「0 位患者」——那会让人以为数据没了');
+  const r2 = await p.tools.find((t) => t.name === 'patient_lookup').run({ name: '张三' }, {});
+  assert.notEqual(r2.data?.status, 'new', '不能因为读不出注册表就把老患者判成新患者');
+});
+
+await testAsync('注册表结构不符（patients 不是对象）→ 拒绝', async () => {
+  const p = freshPack();
+  fs.writeFileSync(file('patients.json'), JSON.stringify({ nextId: 1, patients: [] }));
+  const r = await p.tools.find((t) => t.name === 'patient_register').run({ name: '张三' }, {});
+  assert.notEqual(r.ok, true);
+  assert.ok(/结构不符/.test(String(r.error)));
+});
+
+await testAsync('★ 独立兜底：nextId 被改小、盘上已有 P001 → 跳过 P001 而不是复用', async () => {
+  const p = freshPack();
+  seedSnapshot('P001');
+  seedSnapshot('P002');
+  // 注册表里没有任何患者记录，nextId 还停在 1（模拟注册表被回滚/替换）
+  fs.writeFileSync(file('patients.json'), JSON.stringify({ nextId: 1, patients: {} }));
+  const r = await p.tools.find((t) => t.name === 'patient_register').run({ name: '新患者' }, {});
+  assert.equal(r.ok, true);
+  assert.equal(r.data.patientId, 'P003', `必须跳过盘上已有的 P001/P002，实际给了 ${r.data.patientId}`);
+});
+
+await testAsync('ctx.llm 不可用 → 明确报错且不落盘（不假装成功）', async () => {
+  const p = freshPack();
+  await p.tools.find((t) => t.name === 'patient_register').run({ name: '张三' }, {});
+  const r = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '首诊' }, {});
+  assert.notEqual(r.ok, true, 'llm 不可用时必须失败');
+  assert.equal(fs.existsSync(file(path.join('intake', 'P001'))), false, '不得落盘');
+});
+
+await testAsync('模型返回非 JSON → 明确报错且不落盘', async () => {
+  const p = freshPack();
+  await p.tools.find((t) => t.name === 'patient_register').run({ name: '张三' }, {});
+  const r = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '首诊' },
+    { llm: async () => ({ data: null, text: '抱歉，我无法解析。' }) });
+  assert.notEqual(r.ok, true);
+  assert.equal(fs.existsSync(file(path.join('intake', 'P001'))), false, '不得落盘');
+});
+
+await testAsync('缺项补齐后可正常落盘（不因一次缺项就永久卡死）', async () => {
+  const p = freshPack();
+  await p.tools.find((t) => t.name === 'patient_register').run({ name: '张三' }, {});
+  const miss = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '只说了一半' },
+    { llm: async () => ({ data: { complete: false, ...F, kouke: '', jiubing: '' } }) });
+  assert.equal(fs.existsSync(file(path.join('intake', 'P001'))), false, '缺项时不应落盘');
+  assert.ok(String(miss.output).includes('继续'), '应提示继续采集');
+  const okRes = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '补齐了' },
+    { llm: async () => ({ data: { complete: true, ...F } }) });
+  assert.equal(okRes.ok, true, '补齐后必须能落盘');
+  assert.equal(fs.readdirSync(file(path.join('intake', 'P001'))).filter((f) => f.endsWith('.json')).length, 1);
+});
+
 // 收尾：清掉临时 home（测试全程不写真实 MINGDAO_HOME）
 fs.rmSync(TMP_HOME, { recursive: true, force: true });
+fs.rmSync(HOME2, { recursive: true, force: true });
 
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

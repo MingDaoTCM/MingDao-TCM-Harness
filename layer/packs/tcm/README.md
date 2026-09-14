@@ -25,7 +25,7 @@ layer/packs/tcm/
   pack.json              # manifest：apiVersion / engines / permissions / contributes
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
-  test/pack.test.mjs        # 34 项：契约 / 红线阻断（真引擎）/ 工具功能
+  test/pack.test.mjs        # 42 项：契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
   test/integration.test.mjs # 6 项：真实 agent 循环（含「域内调用真的入账」）
   README.md                 # 本文件
 ```
@@ -132,7 +132,7 @@ Dify Chatflow 的 `chat-messages` 接口只返回文本，不支持 OpenAI 风�
 # ① 静态校验（下游 CI 门禁，应退出 0）
 mingdao pack verify layer/packs/tcm
 
-# ② 单元 + 红线测试（34 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
+# ② 单元 + 红线 + 功能 + 错误路径测试（42 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
 # ③ 端到端集成测试（6 项；让 Pack 工具在**真实 agent 循环**里跑一遍）
@@ -143,13 +143,14 @@ mingdao pack list
 mingdao pack info tcm
 ```
 
-测试分三层，**每层都要求断言能失败**：
+测试分四层，**每层都要求断言能失败**：
 
 | 层 | 覆盖 |
 |---|---|
 | 纯函数 | `matchPatient`（含同名多命中不静默挑一个）、`missingFields`、`visitLabel`、`daysSince` |
 | 红线阻断 | 用**内核真实引擎**断言三条红线确实拦得住；并断言"该放行的放行"（带了病历号不拦、十项齐全不拦、纯事实输出不拦、既往确诊不被误伤） |
 | 工具功能 | 临时 home + 桩 llm 跑完整业务流：登记 → 首诊落盘 → 复诊落盘 → 四态对比 → 回访看板/随访；并断言**缺项时确实没有写盘**、只读工具确实没写注册表 |
+| 错误路径 | 注册表损坏/结构不符/`nextId` 被改小/`ctx.llm` 不可用/模型返回非 JSON/缺项后补齐 —— 断言**该失败的一定失败、且一定没有副作用** |
 | 端到端 | 真实 `createAgent` + 桩 provider：两轮 `tool_calls` → 工具真的被 dispatch、副作用真的落盘、结果真的回填；**并断言域内模型调用真的入账**（`cache-stats.jsonl` 里 `pack=tcm`、`purpose=intake-extract`、`packCost>0`、`cost=null`） |
 
 测试**刻意不复刻一份约束引擎**——复刻出来的断言在真引擎坏掉时照样通过，是假绿。
@@ -159,9 +160,9 @@ mingdao pack info tcm
 > **不**证明生产环境的 provider 会产出 `tool_calls`——那正是 §四 待决策的事。
 > 它的价值在于：无论最后选 A 还是 B，这条链都已经验过，不需要边接线边怀疑内核。
 
-### 功能测试抓出的两个真 bug（已修）
+### 测试抓出的三个真 bug（已修）
 
-这两条都不是推理出来的，是写测试时跑出来的——**只验证"能挂载、红线能拦"是发现不了它们的**：
+这三条都不是推理出来的，是写测试时跑出来的——**只验证"能挂载、红线能拦"是发现不了它们的**：
 
 1. **新患者永远建不出来**：`intake_collect` 要求病历号已存在，但没有任何工具会创建患者
    （原 `chat()` 是在调用 Dify 前就 `allocId` 建好了）。首诊会直接卡死。→ 补 `patient_register`。
@@ -170,6 +171,14 @@ mingdao pack info tcm
    （原 `dify.mjs` 就有这个隐患，只是从没被测试碰到过。）
    并且 `visit_compare` 按 mtime 排序，同时刻写入时**左右会颠倒**。
    → 文件名撞名时递增时间戳；排序改按文件名里的时间戳数值。
+3. **注册表损坏会静默把病历号发重**（性质最严重的一条）：
+   `patients.json` 读不出来时原本回退成空注册表 → 从 `P001` 重新发号，
+   而 `intake/P001/` 的病历快照还在盘上 → **两个不同患者共用一个病历号**，
+   而且它返回 `ok:true`、没有任何告警。这正是三条红线要防的串病历。
+   → 只有「文件根本不存在」才允许从 P001 开始；损坏/结构不符一律**大声失败**并给出修复建议。
+   另加一层独立兜底：`allocId` 会跳过**盘上已有 `intake/<id>/` 目录**的号，
+   即使注册表被回滚或替换，也不会复用已有病历的号。
+   > 原则：**发错号不可逆，拒绝服务可恢复** —— 医疗数据上这两者的代价不对称。
 
 ## 七、迁移进度
 
@@ -201,5 +210,14 @@ mingdao pack info tcm
 - `patients.json`、`intake/**` 是**真实患者数据**，已在 `.gitignore` 中排除，永不入库；
 - 快照写入用**原子写**（临时文件 + `rename`），避免崩溃时留下半份病历；
 - 半份病历**刻意不落盘**：它会被下一次复诊当成基线，比没有更危险；
+- 注册表损坏时**大声失败**，绝不降级成"空注册表"——发错病历号不可逆，拒绝服务可恢复；
+- `allocId` 有一层独立兜底：跳过盘上已有 `intake/<id>/` 的号，不依赖注册表自身完好；
 - `zhenduan` 字段对重大疾病诊断有硬规则（原样保留、绝不概括）；
 - 本 Pack 不做任何诊疗判断，**判断权始终归属执业医师**。
+
+### 一个仍存在的结构性风险（接线时必须一并处理）
+
+`layer/providers/dify.mjs` 里**仍有一份**患者注册表/快照的读写逻辑。
+当前两套并存是安全的——因为 Pack 工具还没被触发（见 §四）——但**一旦接线，两条写入路径会同时存在**：
+两个实现各写一份 `patients.json`，互相覆盖。
+所以接线时必须二选一：把 `dify.mjs` 的域逻辑删掉（推荐，本来就该删），或让它只读不写。
