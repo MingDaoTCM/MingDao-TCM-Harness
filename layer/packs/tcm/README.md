@@ -25,8 +25,9 @@ layer/packs/tcm/
   pack.json              # manifest：apiVersion / engines / permissions / contributes
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
-  test/pack.test.mjs     # 34 项测试（契约 / 红线阻断 / 工具功能）
-  README.md              # 本文件
+  test/pack.test.mjs        # 34 项：契约 / 红线阻断（真引擎）/ 工具功能
+  test/integration.test.mjs # 6 项：真实 agent 循环（含「域内调用真的入账」）
+  README.md                 # 本文件
 ```
 
 安装位置：`$MINGDAO_HOME/packs/tcm/`（**用户级**）。
@@ -131,10 +132,13 @@ Dify Chatflow 的 `chat-messages` 接口只返回文本，不支持 OpenAI 风�
 # ① 静态校验（下游 CI 门禁，应退出 0）
 mingdao pack verify layer/packs/tcm
 
-# ② 全部测试（34 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
+# ② 单元 + 红线测试（34 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
-# ③ 装进一个 MINGDAO_HOME 后确认挂载
+# ③ 端到端集成测试（6 项；让 Pack 工具在**真实 agent 循环**里跑一遍）
+MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/integration.test.mjs
+
+# ④ 装进一个 MINGDAO_HOME 后确认挂载
 mingdao pack list
 mingdao pack info tcm
 ```
@@ -146,9 +150,14 @@ mingdao pack info tcm
 | 纯函数 | `matchPatient`（含同名多命中不静默挑一个）、`missingFields`、`visitLabel`、`daysSince` |
 | 红线阻断 | 用**内核真实引擎**断言三条红线确实拦得住；并断言"该放行的放行"（带了病历号不拦、十项齐全不拦、纯事实输出不拦、既往确诊不被误伤） |
 | 工具功能 | 临时 home + 桩 llm 跑完整业务流：登记 → 首诊落盘 → 复诊落盘 → 四态对比 → 回访看板/随访；并断言**缺项时确实没有写盘**、只读工具确实没写注册表 |
+| 端到端 | 真实 `createAgent` + 桩 provider：两轮 `tool_calls` → 工具真的被 dispatch、副作用真的落盘、结果真的回填；**并断言域内模型调用真的入账**（`cache-stats.jsonl` 里 `pack=tcm`、`purpose=intake-extract`、`packCost>0`、`cost=null`） |
 
 测试**刻意不复刻一份约束引擎**——复刻出来的断言在真引擎坏掉时照样通过，是假绿。
 `pack.test.mjs` 直接 `import` 内核的 `compileConstraints` / `checkPreTool` / `checkPostTool` / `checkOutput`。
+
+> 端到端测试用的是**桩 provider**，所以它证明的是「**工具→入账**这条链在内核里是通的」，
+> **不**证明生产环境的 provider 会产出 `tool_calls`——那正是 §四 待决策的事。
+> 它的价值在于：无论最后选 A 还是 B，这条链都已经验过，不需要边接线边怀疑内核。
 
 ### 功能测试抓出的两个真 bug（已修）
 
@@ -173,9 +182,19 @@ mingdao pack info tcm
 | 5. 领域提示词抽成 `prompts/domain.md` | ✅ |
 | 6. `dify.mjs` 只保留协议适配 | ⏸ **刻意未做**——等架构决策（见 §四） |
 | 7. `mingdao pack verify` 退出 0 | ✅ |
-| 8. 域内模型调用改走 `ctx.llm()`（消灭 `usage:{0,0}`） | ✅（代码就绪，**要等工具真被调用才看得到账**） |
+| 8. 域内模型调用改走 `ctx.llm()`（消灭 `usage:{0,0}`） | ✅ **机制已在真实 agent 链路里验证**（集成测试断言 `cache-stats.jsonl` 出现 `pack=tcm` / `purpose=intake-extract` / `packCost>0`） |
 
-**DoD 对照**：①③⑤⑦ 已满足；②④ 依赖架构接线；⑥（不改内核源码）全程遵守。
+**DoD 对照**（①`pack verify` 退出 0 ②域内调用进 `cost --by pack` ③三条红线可被测试阻断
+④工具在 WebUI 显示为卡片 ⑤同名多命中不回归 ⑥不改内核源码）：
+
+| | 状态 |
+|---|---|
+| ① | ✅ 退出 0（5 工具 / 4 约束 / 1 提示词段） |
+| ② | 🟡 **机制已验证**：集成测试用桩 provider 证明「工具 → `ctx.llm` → 归因记录」这条链是通的；**生产环境能否触发工具取决于 §四 的架构决策** |
+| ③ | ✅ 用内核真实引擎逐条断言（含"该放行的放行"） |
+| ④ | ⏸ 同样依赖 §四——工具已注册，但要有真实 `tool_calls` 才会出现卡片 |
+| ⑤ | ✅ 单测 + 功能测试双层覆盖（`patient_lookup` 返回候选、`patient_register` 拒绝重复登记） |
+| ⑥ | ✅ 全程只动 `layer/`，上游源码零改动 |
 
 ## 八、数据与合规
 
