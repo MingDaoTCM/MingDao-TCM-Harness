@@ -1,0 +1,31 @@
+{
+  "apiVersion": 1,
+  "name": "tcm",
+  "displayName": "中医垂域层",
+  "version": "0.2.0",
+  "engines": {
+    "mingdao": ">=0.5 <0.7"
+  },
+  "description": "中医问诊：十问采集 / 病历号患者系统 / 复诊四态对比 / 回访追踪。只做采集与病历起草，不输出诊疗结论。",
+  "author": "MingDaoTCM",
+  "license": "private",
+  "permissions": {
+    "fs": [
+      "<home>/patients.json",
+      "<home>/intake/**"
+    ],
+    "net": [
+      "https://dify.mingdaotcm.cn"
+    ],
+    "env": [
+      "MINGDAO_HOME"
+    ]
+  },
+  "contributes": {
+    "tools": true,
+    "promptSections": [
+      "prompts/domain.md"
+    ],
+    "constraints": true
+  }
+}
