@@ -26,7 +26,7 @@ layer/packs/tcm/
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
   test/pack.test.mjs        # 42 项：契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
-  test/integration.test.mjs # 6 项：真实 agent 循环（含「域内调用真的入账」）
+  test/integration.test.mjs # 8 项：真实 agent 循环 + 提示词注入 + 入账
   README.md                 # 本文件
 ```
 
@@ -122,6 +122,27 @@ Dify Chatflow 的 `chat-messages` 接口只返回文本，不支持 OpenAI 风�
 
 最后一条是本 Pack 只用这三种 contributions 的原因。
 
+### 5.1 WebUI 里的 Pack 工具卡片（DoD ④ 的核对结果）
+
+结论：**Pack 工具会走与内置工具完全相同的卡片组件**，不需要任何下游改动。
+
+核对依据（`src/web/app.js` 的 `renderToolStartEvent` / `renderToolEvent`）：
+
+- 卡片按 `ev.name` / `ev.args` / `ev.result` **通用渲染**，全文件唯一的按名字分支是 `ev.name === 'task'`（子代理）；
+- 结果渲染的兜底分支是 `else if (r.output)` —— 正是 Pack 工具返回的 `{ok, output}` 形状，
+  所以医师能看到「📋 病历快照已落盘…」这样的正文，而不是一坨 JSON；
+- 状态位按 `r.ok !== false` 判定，Pack 工具的错误返回（`{ok:false,error}`）会正确显示为 ✖。
+
+**但有三处对医师不友好的细节**（都属于上游 WebUI 的缺口，下游无法修——DoD ⑥ 禁止改上游源码）：
+
+| 现象 | 根因 | 建议的上游改法 |
+|---|---|---|
+| 卡片标题显示 `pack__tcm__intake_collect` | 渲染用的是**注册全名**，前缀由 `mountPacks` 自动加 | 用 `manifest.displayName` + 工具本地名渲染，或至少剥掉 `pack__<pack>__` 前缀 |
+| 参数摘要为空 | 只取 `args.path \|\| args.pattern \|\| args.name` | 补 `args.patientId` 等常见键，或退化成显示前 1～2 个参数 |
+| 图标是通用 🔌 | 图标表按内置工具名硬编码 | Pack 可在 manifest 里声明工具图标（或按 pack 给一个默认图标） |
+
+这三条不影响功能，只影响观感；已作为上游反馈项记录，本 Pack 侧不做 hack 绕过。
+
 > 上游在 `MIGRATION-DEYI-v0.5.md` 里写了「内核 bug 一律在上游修；扩展点不够用就直接反馈上游，
 > 不要在下游 fork 内核」。上面这几条建议反馈回去——尤其 **Pack 工具无法被 Dify 类 Provider 触发**
 > 这一条，它不在指南的覆盖范围内。
@@ -135,7 +156,7 @@ mingdao pack verify layer/packs/tcm
 # ② 单元 + 红线 + 功能 + 错误路径测试（42 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
-# ③ 端到端集成测试（6 项；让 Pack 工具在**真实 agent 循环**里跑一遍）
+# ③ 端到端集成测试（8 项；让 Pack 工具在**真实 agent 循环**里跑一遍，并核对提示词段真的注入）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/integration.test.mjs
 
 # ④ 装进一个 MINGDAO_HOME 后确认挂载
@@ -201,7 +222,7 @@ mingdao pack info tcm
 | ① | ✅ 退出 0（5 工具 / 4 约束 / 1 提示词段） |
 | ② | 🟡 **机制已验证**：集成测试用桩 provider 证明「工具 → `ctx.llm` → 归因记录」这条链是通的；**生产环境能否触发工具取决于 §四 的架构决策** |
 | ③ | ✅ 用内核真实引擎逐条断言（含"该放行的放行"） |
-| ④ | ⏸ 同样依赖 §四——工具已注册，但要有真实 `tool_calls` 才会出现卡片 |
+| ④ | 🟡 **机制已验证**（§5.1：卡片按 `ev.name`/`ev.args` 通用渲染，结果兜底分支正是 `{ok,output}`）；出现卡片仍需真实 `tool_calls` → 依赖 §四 |
 | ⑤ | ✅ 单测 + 功能测试双层覆盖（`patient_lookup` 返回候选、`patient_register` 拒绝重复登记） |
 | ⑥ | ✅ 全程只动 `layer/`，上游源码零改动 |
 

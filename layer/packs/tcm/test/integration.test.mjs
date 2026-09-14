@@ -44,6 +44,7 @@ const tcmWarnings = (mounted.warnings || []).filter((w) => String(w).includes('t
 const { createAgent } = await import(path.join(KERNEL, 'src/agent.js'));
 const { createIO } = await import(path.join(KERNEL, 'src/ui.js'));
 const { listCacheStats } = await import(path.join(KERNEL, 'src/cachestats.js'));
+const { buildSystemPrompt, packPromptBlock } = await import(path.join(KERNEL, 'src/prompts.js'));
 
 const F = {
   zhushu: '失眠多梦三个月', zhenduan: '宫颈癌（2024 年确诊，术后）', hanre: '手足心热',
@@ -146,6 +147,26 @@ check('★ 域内模型调用真的入账：cache-stats 里有 pack=tcm 的归�
 
 check('域内调用用的模型是 deepseek-v4-flash（关思考的提取模型，不是会话主模型）', () => {
   assert.ok(llmCalls.every((c) => c.model === 'deepseek-v4-flash'), JSON.stringify(llmCalls));
+});
+
+// 提示词段：这是 Pack 的第三个贡献面，也是「三条红线」在提示词层的落点。
+// 它接得对不对，只看 mountPacks 的返回值是看不出来的 —— 必须真的构建一次系统提示。
+const sysPrompt = buildSystemPrompt({ workingDir: WORK });
+const sysPrompt2 = buildSystemPrompt({ workingDir: WORK });
+const packBlock = packPromptBlock();
+
+check('域提示词段真的被注入系统提示（不是只挂在 mountPacks 的返回值里）', () => {
+  assert.ok(packBlock.includes('<pack_rules>'), 'packPromptBlock 应产出 <pack_rules> 包裹');
+  assert.ok(packBlock.includes('pack="tcm" id="tcm-domain"'), '应带 tcm 段标签');
+  for (const kw of ['缺项绝不编造', '不输出诊疗结论', '不得跨患者串病历', '判断权始终归属执业医师']) {
+    assert.ok(sysPrompt.includes(kw), `系统提示应含「${kw}」`);
+  }
+  assert.ok(sysPrompt.includes('zhenduan'), '十问字段说明应进系统提示');
+  assert.ok(sysPrompt.includes('patient_lookup'), '工作流程应告诉模型先调 patient_lookup');
+});
+
+check('★ 提示词段两次构建字节完全一致（否则每轮都打掉 DeepSeek 前缀缓存）', () => {
+  assert.equal(sysPrompt, sysPrompt2);
 });
 
 // 收尾
