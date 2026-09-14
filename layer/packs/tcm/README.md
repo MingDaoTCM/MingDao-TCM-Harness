@@ -26,7 +26,7 @@ layer/packs/tcm/
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
   test/pack.test.mjs        # 42 项：契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
-  test/integration.test.mjs # 8 项：真实 agent 循环 + 提示词注入 + 入账
+  test/integration.test.mjs # 11 项：真实 agent 循环 + 提示词注入 + 入账 + 输出红线
   README.md                 # 本文件
 ```
 
@@ -34,6 +34,22 @@ layer/packs/tcm/
 选用户级而不是项目级的理由：项目级 `<repo>/.mingdao/packs/` 在 v0.6.2 起**默认不挂载**，
 需先 `mingdao pack trust <项目目录>` 记录内容指纹、且内容一变即失效；用户级不受信任门限制
 （见 `PACK-API.md` §1.1）。
+
+> ### ⚠ 装上这个 Pack **不是零影响** —— 装之前请先读这一段
+>
+> 约束一旦挂载就生效，而 `output-forbid` 作用在 **agent 的正文**上，**与 provider 无关**
+> （`agent.js` 的 `applyOutputConstraints`）。所以：
+>
+> **只要你把本 Pack 装到 `$MINGDAO_HOME/packs/`，那条「不输出诊疗结论」的红线
+> 立刻就作用在当前的 Dify 问诊输出上** —— 不需要等 §四 的架构决策。
+> 表现为：Dify 产出的正文里出现 `有效` / `好转` / `治愈` 时，会被内核自动改写一次
+> （改写请求计入本回合 usage），改写后仍命中则替换为合规文案并记审计。
+>
+> 这是**好事**（红线从"提示词里的一句劝告"变成内核强制、进审计），
+> 但它确实会改变你现在看到的行为——所以先说清楚，别以为"装了没接线就等于没装"。
+>
+> 相比之下另外两条红线在接线前是**惰性**的：`tool-arg-require` 与 `completeness`
+> 都只作用于 Pack 自己的工具，而工具在接线前不会被调用。
 
 ## 三、能力面
 
@@ -213,7 +229,7 @@ mingdao pack verify layer/packs/tcm
 # ② 单元 + 红线 + 功能 + 错误路径测试（42 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
-# ③ 端到端集成测试（8 项；让 Pack 工具在**真实 agent 循环**里跑一遍，并核对提示词段真的注入）
+# ③ 端到端集成测试（11 项；真实 agent 循环 + 提示词注入 + 输出红线）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/integration.test.mjs
 
 # ④ 装进一个 MINGDAO_HOME 后确认挂载
@@ -229,10 +245,20 @@ mingdao pack info tcm
 | 红线阻断 | 用**内核真实引擎**断言三条红线确实拦得住；并断言"该放行的放行"（带了病历号不拦、十项齐全不拦、纯事实输出不拦、既往确诊不被误伤） |
 | 工具功能 | 临时 home + 桩 llm 跑完整业务流：登记 → 首诊落盘 → 复诊落盘 → 四态对比 → 回访看板/随访；并断言**缺项时确实没有写盘**、只读工具确实没写注册表 |
 | 错误路径 | 注册表损坏/结构不符/`nextId` 被改小/`ctx.llm` 不可用/模型返回非 JSON/缺项后补齐 —— 断言**该失败的一定失败、且一定没有副作用** |
-| 端到端 | 真实 `createAgent` + 桩 provider：两轮 `tool_calls` → 工具真的被 dispatch、副作用真的落盘、结果真的回填；**并断言域内模型调用真的入账**（`cache-stats.jsonl` 里 `pack=tcm`、`purpose=intake-extract`、`packCost>0`、`cost=null`） |
+| 端到端 | 真实 `createAgent` + 桩 provider：①两轮 `tool_calls` → 工具真的被 dispatch、副作用真的落盘、结果真的回填，**并断言域内模型调用真的入账**（`cache-stats.jsonl` 里 `pack=tcm`、`purpose=intake-extract`、`packCost>0`、`cost=null`）；②提示词段真的进了系统提示且两次构建字节一致；③**含「好转」的正文被红线改写**、命中进审计、纯事实正文不被改写 |
 
 测试**刻意不复刻一份约束引擎**——复刻出来的断言在真引擎坏掉时照样通过，是假绿。
 `pack.test.mjs` 直接 `import` 内核的 `compileConstraints` / `checkPreTool` / `checkPostTool` / `checkOutput`。
+
+**两条关于「断言本身」的纪律**（写这套测试时各踩过一次）：
+
+1. **异步断言必须用 `testAsync` / `checkAsync`。** 把 `async` 函数传给同步的 `test()` / `check()`
+   会**假绿**——Promise 不被 await，里面断言失败也照样打印 ✓、照样计入通过。
+   两个入口分开命名，就是为了让"用错"在阅读时看得出来。（本仓库曾有 2 处踩中，已修；
+   复查命令：`awk '/^[[:space:]]*test\(/{if($0~/async/)print NR": "$0}' layer/packs/tcm/test/pack.test.mjs`）
+2. **断言要能失败。** 定期做变异验证：例如把 `no-efficacy-conclusion` 的 `action`
+   从 `block-and-rewrite` 改成 `warn`，红线测试**必须**变红。
+   实测过：42 → 41 通过 / 1 失败。改不红，就说明这条断言是摆设。
 
 > 端到端测试用的是**桩 provider**，所以它证明的是「**工具→入账**这条链在内核里是通的」，
 > **不**证明生产环境的 provider 会产出 `tool_calls`——那正是 §四 待决策的事。
@@ -278,7 +304,7 @@ mingdao pack info tcm
 |---|---|
 | ① | ✅ 退出 0（5 工具 / 4 约束 / 1 提示词段） |
 | ② | 🟡 **机制已验证**：集成测试用桩 provider 证明「工具 → `ctx.llm` → 归因记录」这条链是通的；**生产环境能否触发工具取决于 §四 的架构决策** |
-| ③ | ✅ 用内核真实引擎逐条断言（含"该放行的放行"） |
+| ③ | ✅ 三层验证：单测用内核真实引擎逐条断言（含"该放行的放行"）；端到端在**真实 agent** 里验证输出红线会改写违规正文并写审计。注：`output-forbid` 与 provider 无关，**装上 Pack 即已生效**（见 §二 的警告） |
 | ④ | 🟡 **机制已验证**（§5.1：卡片按 `ev.name`/`ev.args` 通用渲染，结果兜底分支正是 `{ok,output}`）；出现卡片仍需真实 `tool_calls` → 依赖 §四 |
 | ⑤ | ✅ 单测 + 功能测试双层覆盖（`patient_lookup` 返回候选、`patient_register` 拒绝重复登记） |
 | ⑥ | ✅ 全程只动 `layer/`，上游源码零改动 |

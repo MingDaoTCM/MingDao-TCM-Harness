@@ -86,7 +86,7 @@ test('intake_collect 的 schema 要求 patientId（模型侧第一道）', () =>
   const t = pack.tools.find((x) => x.name === 'intake_collect');
   assert.ok(t.parameters.required.includes('patientId'));
 });
-test('缺少 patientId 时工具自身也拒绝（约束之外的第二层）', async () => {
+await testAsync('缺少 patientId 时工具自身也拒绝（约束之外的第二层）', async () => {
   const t = pack.tools.find((x) => x.name === 'intake_collect');
   const r = await t.run({ consultText: '主诉失眠' }, {});
   assert.equal(r.ok, false, '没有病历号必须拒绝');

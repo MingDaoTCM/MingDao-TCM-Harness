@@ -36,6 +36,16 @@ function check(name, fn) {
   try { fn(); passed += 1; console.log(`  ✓ ${name}`); }
   catch (e) { failed += 1; console.log(`  ✗ ${name}\n      ${e?.message || e}`); }
 }
+/**
+ * 异步断言必须用这个。
+ * 注意：把 async 函数传给上面的同步 check() 会**假绿** —— Promise 不被 await，
+ * 断言失败也照样打印 ✓、也照样计入通过。这类「断言本身的缺陷」比被测代码的缺陷更隐蔽，
+ * 所以两个入口分开命名，让「用错」在阅读时就能看出来。
+ */
+async function checkAsync(name, fn) {
+  try { await fn(); passed += 1; console.log(`  ✓ ${name}`); }
+  catch (e) { failed += 1; console.log(`  ✗ ${name}\n      ${e?.message || e}`); }
+}
 
 const { mountPacks } = await import(path.join(KERNEL, 'src/packs.js'));
 const mounted = await mountPacks({ packs: [PACK_DIR] }, { cwd: WORK });
@@ -167,6 +177,58 @@ check('域提示词段真的被注入系统提示（不是只挂在 mountPacks �
 
 check('★ 提示词段两次构建字节完全一致（否则每轮都打掉 DeepSeek 前缀缓存）', () => {
   assert.equal(sysPrompt, sysPrompt2);
+});
+
+// ─────────────────────────────────────────────────────────────
+// 场景 2：输出红线 —— **与 provider 无关**。
+// 这是「装上 Pack 就立刻生效」的原因：约束作用在 agent 的正文上，
+// 不管这段正文是 Dify 产的还是 DeepSeek 产的。
+// 也就是说，**还没做架构接线，第三条红线就已经在当前 Dify 路径上生效了**。
+// ─────────────────────────────────────────────────────────────
+console.log('\n[集成] 输出红线（provider 无关：装上 Pack 即生效）');
+
+const rewriteCalls = [];
+const dirtyProvider = {
+  async chat(opts) {
+    if (!opts.tools || opts.tools.length === 0) {
+      rewriteCalls.push(String(opts.messages?.[opts.messages.length - 1]?.content || '').slice(0, 30));
+      return { text: '本次主诉失眠，入睡时间较上次提前，二便正常。', toolCalls: null, usage: { prompt_tokens: 30, completion_tokens: 20 }, finish: 'stop' };
+    }
+    return { text: '本次服药后患者病情好转，继续原方。', toolCalls: null, usage: { prompt_tokens: 10, completion_tokens: 8 }, finish: 'stop' };
+  },
+};
+const agent2 = createAgent({
+  provider: dirtyProvider,
+  permission: { async check() { return true; } },
+  io: createIO({ quiet: true }),
+  modelName: 'deepseek-v4-flash',
+  workingDir: WORK,
+  cfg: { permission: 'auto', model: 'deepseek-v4-flash' },
+});
+const res2 = await agent2.runTurn([{ role: 'user', content: '复诊看看' }]);
+
+check('★ 含「好转」的正文被内核红线改写（Dify 类 provider 同样受管）', () => {
+  assert.ok(rewriteCalls.length >= 1, '应触发一次改写请求');
+  assert.ok(!/好转/.test(String(res2.text || '')), `最终正文不应含「好转」，实际：${res2.text}`);
+});
+
+check('红线命中写进了审计（受监管场景要能回答「红线何时被触发」）', () => {
+  let audit = '';
+  try { audit = fs.readFileSync(path.join(HOME, 'audit.jsonl'), 'utf8'); } catch {}
+  assert.ok(audit.includes('no-efficacy-conclusion'), `审计里应出现红线 id，实际审计长度 ${audit.length}`);
+});
+
+await checkAsync('放行路径不受影响（纯事实陈述原样通过，不产生改写请求）', async () => {
+  // 上面那次已消耗改写；这里换一个只产纯事实的 provider，断言不触发改写
+  const clean = { chat: async () => ({ text: '本次主诉失眠，二便正常。', toolCalls: null, usage: { prompt_tokens: 5, completion_tokens: 5 }, finish: 'stop' }) };
+  const before = rewriteCalls.length;
+  const a3 = createAgent({
+    provider: clean, permission: { async check() { return true; } }, io: createIO({ quiet: true }),
+    modelName: 'deepseek-v4-flash', workingDir: WORK, cfg: { permission: 'auto', model: 'deepseek-v4-flash' },
+  });
+  const r3 = await a3.runTurn([{ role: 'user', content: '复诊看看' }]);
+  assert.equal(rewriteCalls.length, before, '纯事实正文不应触发改写');
+  assert.equal(r3.text, '本次主诉失眠，二便正常。');
 });
 
 // 收尾
