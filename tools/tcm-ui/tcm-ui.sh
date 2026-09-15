@@ -21,6 +21,7 @@ MINGDAO_KERNEL="${MINGDAO_KERNEL:-}"
 MINGDAO_HOME="${MINGDAO_HOME:-}"
 KERNEL_PORT="${KERNEL_PORT:-3821}"
 UI_PORT="${UI_PORT:-3830}"
+NODE_BIN="${NODE_BIN:-}"
 [ -f "$CONF" ] && . "$CONF"
 
 say()  { printf '  %s\n' "$*"; }
@@ -64,8 +65,43 @@ MINGDAO_KERNEL="$MINGDAO_KERNEL"
 MINGDAO_HOME="$MINGDAO_HOME"
 KERNEL_PORT=$KERNEL_PORT
 UI_PORT=$UI_PORT
+# node 留空则每次启动自动挑一个 fetch 可用的（本机 /usr/bin/node v20.15.1 是坏的）
+NODE_BIN=""
 EOF
   say "已生成配置：$CONF"
+}
+
+# ── 挑一个「fetch 真能用」的 node ──────────────────────────
+#
+# 为什么不能只查版本号：实测本机 /usr/bin/node (v20.15.1, dpkg 包 nodejs) 的安装是**坏的** ——
+# 起得来、`node --version` 正常、跑内核也没事，但内置 `fetch()` 一调就抛
+#   [CompileError: WebAssembly.compile(): section (code 10, "Code") extends past end of the module]
+# 并伴随一个 unhandled rejection 直接崩进程。
+# 而薄代理**全靠 fetch 转发**，于是表现成「界面能打开、一刷新数据就 502 / 进程消失」。
+# systemd 用户会话的 PATH 只有 /usr/bin，交互 shell 里却先命中 ~/.local 的 v24 —— 所以
+# 「我在终端里跑是好的」和「开机自启后打不开」会同时成立。
+#
+# 结论：必须做一次真实的 fetch 冒烟测试，而不是信版本号或 PATH 顺序。
+node_ok() {
+  local n="$1"
+  [ -x "$n" ] || return 1
+  # ⚠ 判据必须是**退出码**，不能只看 stdout。
+  # 实测坏 node 会先把 fetch 的 reject 抛给你（被 try 吞掉）、照常打印 OK，
+  # 然后才因子进程内部的 unhandled rejection 崩掉 —— 只看输出会**假通过**。
+  timeout 12 "$n" --input-type=module -e '
+    try { await fetch("http://127.0.0.1:1/", { signal: AbortSignal.timeout(3000) }); } catch {}
+  ' >/dev/null 2>&1
+}
+pick_node() {
+  local c
+  if [ -n "${NODE_BIN:-}" ] && node_ok "$NODE_BIN"; then printf '%s' "$NODE_BIN"; return 0; fi
+  for c in $(which -a node 2>/dev/null) \
+           /usr/local/bin/node /usr/bin/node \
+           "$HOME"/.local/node-*/bin/node "$HOME"/.nvm/versions/node/*/bin/node \
+           /opt/node*/bin/node; do
+    node_ok "$c" && { printf '%s' "$c"; return 0; }
+  done
+  return 1
 }
 
 # ── 端口 / 进程工具 ────────────────────────────────────────
@@ -97,7 +133,21 @@ wait_http() {
 cmd_start() {
   [ -n "$MINGDAO_KERNEL" ] && [ -f "$MINGDAO_KERNEL/src/cli.js" ] || die "找不到 MingDao-Harness 内核检出；请在 $CONF 里设置 MINGDAO_KERNEL"
   [ -n "$MINGDAO_HOME" ] && [ -d "$MINGDAO_HOME" ] || die "找不到 MINGDAO_HOME；请在 $CONF 里设置（例：\$HOME/.deyi-tcm）"
-  command -v node >/dev/null || die "PATH 里没有 node"
+
+  NODE_BIN="$(pick_node || true)"
+  [ -n "$NODE_BIN" ] || die "找不到一个 fetch 可用的 node。请在 $CONF 里显式指定，例：NODE_BIN=\"$HOME/.local/node-v24.19.0-linux-x64/bin/node\""
+  say "node： $NODE_BIN（$("$NODE_BIN" --version 2>&1)）"
+  # 把选中的 node 写回配置固定下来：避免每次启动都重新探测，
+  # 也让你能一眼看到「这台机器上最终用的是哪个 node」。
+  if [ -f "$CONF" ]; then
+    if grep -q '^NODE_BIN=' "$CONF" 2>/dev/null; then
+      grep -q '^NODE_BIN=""' "$CONF" 2>/dev/null && \
+        sed -i "s|^NODE_BIN=\"\"|NODE_BIN=\"$NODE_BIN\"|" "$CONF" && say "已把 NODE_BIN 写入 $CONF"
+    else
+      # 老配置（本功能之前生成的）没有这一行 —— 追加，避免每次启动重新探测
+      printf 'NODE_BIN="%s"\n' "$NODE_BIN" >> "$CONF" && say "已把 NODE_BIN 追加到 $CONF"
+    fi
+  fi
 
   local kpid upid
   kpid="$(pid_on_port "$KERNEL_PORT" || true)"
@@ -108,7 +158,7 @@ cmd_start() {
     # 否则：① 父 shell 退出时子进程可能收到 SIGHUP；② 调用方（脚本/终端/CI）会一直等
     # 这几个继承下去的 fd 关闭 —— 表现为「脚本明明跑完了却卡住不返回」。
     ( cd "$MINGDAO_KERNEL" && MINGDAO_HOME="$MINGDAO_HOME" \
-        setsid nohup node src/cli.js web "$KERNEL_PORT" > "$RUN_DIR/kernel.log" 2>&1 < /dev/null & \
+        setsid nohup "$NODE_BIN" src/cli.js web "$KERNEL_PORT" > "$RUN_DIR/kernel.log" 2>&1 < /dev/null & \
         echo $! > "$RUN_DIR/kernel.pid"; disown 2>/dev/null || true )
     if wait_http "http://127.0.0.1:$KERNEL_PORT/api/state" 25; then
       say "内核已启动（端口 $KERNEL_PORT）"
@@ -121,7 +171,7 @@ cmd_start() {
   if alive "$upid"; then
     say "界面已在运行（端口 $UI_PORT，pid $upid）"
   else
-    setsid nohup node "$HERE/server.mjs" --target "http://127.0.0.1:$KERNEL_PORT" --port "$UI_PORT" \
+    setsid nohup "$NODE_BIN" "$HERE/server.mjs" --target "http://127.0.0.1:$KERNEL_PORT" --port "$UI_PORT" \
       > "$RUN_DIR/ui.log" 2>&1 < /dev/null & echo $! > "$RUN_DIR/ui.pid"; disown 2>/dev/null || true
     if wait_http "http://127.0.0.1:$UI_PORT/" 15; then
       say "界面已启动（端口 $UI_PORT）"

@@ -41,7 +41,23 @@ MINGDAO_KERNEL="/path/to/MingDao-Harness"   # 自动发现时会**按 package.js
 MINGDAO_HOME="/home/you/.deyi-tcm"
 KERNEL_PORT=3821
 UI_PORT=3830
+NODE_BIN=""     # 留空=每次启动自动挑一个 fetch 真的能用的 node；选中后会写回本文件
 ```
+
+> ### ⚠ 为什么要挑 node，而不是直接用 PATH 里的
+>
+> 实测本机 `/usr/bin/node`（v20.15.1，dpkg 包 `nodejs`）的安装是**坏的**：起得来、
+> `node --version` 正常、跑内核也没事，**但内置 `fetch()` 一调就抛**
+> `[CompileError: WebAssembly.compile(): section ... extends past end of the module]`
+> 并伴随一个 unhandled rejection 直接崩进程。
+>
+> 薄代理**全靠 fetch 转发**，于是症状是：**界面能打开、一拉数据就 502 / 进程消失**。
+> 更迷惑的是 systemd 用户会话的 PATH 只有 `/usr/bin`，而交互 shell 里先命中的是
+> `~/.local` 的 v24 —— 所以「我在终端里跑是好的」和「开机自启后打不开」会同时成立。
+>
+> 脚本因此做一次**真实的 fetch 冒烟测试**（拿一个必然关闭的端口试，判据是**退出码**，
+> 不是 stdout —— 坏 node 会先把 reject 抛出来、照常打印成功，然后才崩）。
+> 挑中的路径写回 `NODE_BIN`，之后固定使用。
 
 > **为什么发现要按版本挑**：机器上常同时存在旧克隆与新快照（实测：`MingDao-Harness`
 > 是 v0.4.5，`MingDao-Harness-v0.6.3` 才是当前上游）。按目录名的字典序会挑错。
