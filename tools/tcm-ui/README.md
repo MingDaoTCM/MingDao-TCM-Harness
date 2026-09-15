@@ -55,18 +55,16 @@ node tools/tcm-ui/server.mjs
 
 ## 已知限制（诚实记录）
 
-1. **只读意图的指令触发不了 Pack 工具** —— 上游 `agent.js` 的 `toolsFor()` 在只读阶段
-   只放行内置白名单，`readOnly:true` 的 Pack 工具被挡在外面（`isRegisteredToolReadonly()`
-   存在却没用）。所以：
-   - 「请**生成**回访看板」✅ 会调用 `followup_board`
-   - 「回访」❌ 不会（未命中写意图正则 → 只读档 → 工具不可见）
-   这是**上游缺口**，下游绕不过去。详见 `layer/packs/tcm/README.md` §5.2 第 2 条。
-2. **舌象照片需要视觉模型** —— 内核按"当前模型是否 `supportsVision`"决定收不收图片；
-   当前 `dify-chatflow` 不支持视觉，所以传图会被内核明确拒绝（不是静默丢弃）。
-   要真正用起来需要选一个支持视觉的模型，或让 Dify 工作流接收图片输入。
-3. **不是桌面版** —— 这里只交"独立前端 + 薄代理"这一层。打包成 Electrons 桌面应用
+1. ~~只读意图的指令触发不了 Pack 工具~~ —— **上游 v0.6.3 已修**（只读档判定方向反过来，
+   且「域内 Pack 在场时不进只读档」）。实测：只说「回访」现在就会调用 `followup_board` ✓
+2. **舌象照片** —— 上游 v0.6.3 修好了门控：自定义 Provider 现在可以
+   `export const supportsVision = true` 声明视觉（本项目的 `dify.mjs` 已声明）。
+   链路是：内核把图片发成多模态消息 → `dify.mjs` 上传到 Dify（`/v1/files/upload`）
+   → 随 query 一起提交。**前提是 Dify 应用侧也开了视觉**。
+   照片传不上去不会挡住问诊（正文照常，只是这次没有图片）。
+3. **不是桌面版** —— 这里只交"独立前端 + 薄代理"这一层。打包成 Electron 桌面应用
    （自带内核、一次安装、摄像头权限、自动更新）是下一层，照抄内核 `desktop/` 的
-   `main.js` + `electron-builder.yml` 即可，见仓库 README 的分发章节。
+   `main.js` + `electron-builder.yml` 即可。
 
 ## 文件
 

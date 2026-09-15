@@ -55,10 +55,10 @@ test('matchPatient：姓名 + 出生年可收窄到唯一', () => {
   assert.equal(matchPatient(reg, { name: '张三', birth: '1990' }).patient.id, 'P002');
 });
 test('missingFields：空串与「未提及」都算缺', () => {
-  const f = normalizeFields({ zhushu: '失眠', zhenduan: '未提及', hanre: '' });
+  const f = normalizeFields({ zhushu: '失眠', xianbingshi: '未提及', jiwangshi: '' });
   const miss = missingFields(f);
-  assert.ok(miss.includes('zhenduan'), '未提及应算缺');
-  assert.ok(miss.includes('hanre'), '空串应算缺');
+  assert.ok(miss.includes('xianbingshi'), '未提及应算缺');
+  assert.ok(!miss.includes('jiwangshi'), '可选字段为空**不算缺**（否则会把可选当必填）');
   assert.ok(!miss.includes('zhushu'), '有值不应算缺');
 });
 test('visitLabel：初诊/二诊/十一诊', () => {
@@ -94,7 +94,7 @@ await testAsync('缺少 patientId 时工具自身也拒绝（约束之外的第�
 test('提示词段非空且含三条红线关键词', () => {
   const s = pack.promptSections[0];
   assert.ok(s.content.length > 200, '提示词段不应为空');
-  for (const kw of ['缺项绝不编造', '不输出诊疗结论', '不得跨患者串病历']) {
+  for (const kw of ['缺项绝不编造', '不作疗效结论', '不得跨患者串病历']) {
     assert.ok(s.content.includes(kw), `提示词段应含「${kw}」`);
   }
 });
@@ -106,10 +106,13 @@ test('三条红线都已声明', () => {
   assert.ok(cIds.includes('ten-questions-complete'));
   assert.ok(cIds.includes('no-efficacy-conclusion'));
 });
-test('completeness 覆盖全部十个必填字段', () => {
+test('completeness 只覆盖两项必填：主诉 + 现病史', () => {
   const c = pack.constraints.find((x) => x.kind === 'completeness');
   assert.deepEqual(c.fields, REQUIRED_FIELDS);
-  assert.equal(c.fields.length, 10);
+  assert.deepEqual(c.fields, ['zhushu', 'xianbingshi']);
+  for (const opt of ['jiwangshi', 'jiazushi', 'guominshi', 'liuxingbingshi', 'tigejiancha', 'shexiang', 'maixiang', 'suifang']) {
+    assert.ok(!c.fields.includes(opt), `${opt} 是可选，不得进必填红线`);
+  }
 });
 
 if (!KERNEL) {
@@ -138,7 +141,7 @@ if (!KERNEL) {
     assert.ok(!v?.blocked, '带了病历号不应被拦');
   });
 
-  test('红线二 · 十问缺项的结果被 PostToolUse 拒绝', () => {
+  test('红线二 · 必填缺项的结果被 PostToolUse 拒绝', () => {
     const partial = Object.fromEntries(REQUIRED_FIELDS.map((k) => [k, k === 'zhushu' ? '失眠' : '']));
     const v = checkPostTool(compiled, T('intake_collect'), { ok: true, output: '...', data: partial });
     assert.ok(v?.rejected, '缺项结果必须被拒绝');
@@ -151,17 +154,21 @@ if (!KERNEL) {
   });
 
   // 注意：checkOutput 的返回字段是 `hit`（不是 blocked/rejected），与 Pre/PostToolUse 不同名。
-  test('红线三 · 输出含「好转」被 output-forbid 拦下', () => {
-    const v = checkOutput(compiled, '本次服药后患者病情好转，继续原方。');
-    assert.ok(v?.hit, '疗效结论必须被拦下');
-    assert.equal(v.matched, '好转', '应命中「好转」本身');
-    assert.equal(v.action, 'block-and-rewrite', 'action 必须与 Pack 里声明的一致');
+  test('红线三 · **结论性**表述被命中（action=warn：提示并记审计，不替换正文）', () => {
+    const v = checkOutput(compiled, '本次服药后病情明显好转，继续原方。');
+    assert.ok(v?.hit, '结论性表述必须被命中');
+    assert.equal(v.action, 'warn', 'action 必须是 warn —— 正文是医师要看的，不能因为一个词就丢掉');
   });
-  test('红线三 · 「有效」「治愈」同样被拦', () => {
-    for (const w of ['有效', '治愈']) {
-      const v = checkOutput(compiled, `评估：该方${w}。`);
-      assert.ok(v?.hit, `「${w}」必须被拦下`);
+  test('红线三 · 「治疗有效」「已治愈」被命中', () => {
+    for (const w of ['治疗有效', '已治愈']) {
+      const v = checkOutput(compiled, `评估：${w}。`);
+      assert.ok(v?.hit, `「${w}」必须被命中`);
+      assert.equal(v.action, 'warn');
     }
+  });
+  test('红线三 · ★ 事实转述放行（「自述服药后好转」不该被拦——它是事实，不是结论）', () => {
+    const v = checkOutput(compiled, '患者自述服药后好转，睡眠较前改善。');
+    assert.ok(!v?.hit, '临床记录里的事实转述必须放行，否则医师会拿不到正文');
   });
   test('红线三 · 纯事实输出放行', () => {
     const v = checkOutput(compiled, '本次主诉失眠，较上次入睡时间提前，二便正常。');
@@ -181,9 +188,16 @@ console.log('\n[5] 工具功能（临时 home + 桩 llm）');
 
 const tool = (bare) => pack.tools.find((x) => x.name === bare);
 const F = {
-  zhushu: '失眠多梦三个月', zhenduan: '宫颈癌（2024 年确诊，术后）', hanre: '手足心热',
-  han: '夜间盗汗', toushen: '头晕', erbian: '小便偏黄', yinshi: '纳可',
-  xiongfu: '胸闷', kouke: '口干', jiubing: '高血压十年',
+  zhushu: '失眠多梦三个月',
+  xianbingshi: '三月前无诱因出现入睡困难，伴多梦易醒；既往 2024 年确诊为宫颈癌，术后规律复查；未系统治疗失眠。',
+  jiwangshi: '宫颈癌术后；高血压十年',
+  jiazushi: '母亲有高血压',
+  guominshi: '青霉素过敏',
+  liuxingbingshi: '否认疫区接触',
+  tigejiancha: 'T 36.5℃ P 78次/分 R 18次/分 BP 138/86mmHg',
+  shexiang: '舌红苔黄',
+  maixiang: '脉弦细',
+  suifang: '两周后复诊；嘱记录睡眠日记',
 };
 /** 桩：按 purpose 返回预设结构化结果（不联网、行为可控） */
 const stub = (replies) => ({ llm: async ({ purpose }) => ({ data: replies[purpose] ?? null }) });
@@ -218,8 +232,8 @@ await testAsync('patient_register：同名已存在 → 拒绝重复登记（避
   assert.ok(String(r.error).includes('P001'), '错误里应指出已有的病历号');
 });
 
-await testAsync('intake_collect：十问缺项 → 不落盘（半份病历比没有更危险）', async () => {
-  const partial = { complete: false, ...F, han: '', toushen: '', erbian: '', yinshi: '', xiongfu: '', kouke: '', jiubing: '', hanre: '' };
+await testAsync('intake_collect：必填缺项 → 不落盘（半份病历比没有更危险）', async () => {
+  const partial = { complete: false, ...F, zhushu: '', xianbingshi: '' };
   const r = await tool('intake_collect').run({ patientId: 'P001', consultText: '主诉失眠' },
     stub({ 'intake-extract': partial }));
   assert.equal(snapshotFiles('P001').length, 0, '缺项时绝不能落盘');
@@ -227,7 +241,7 @@ await testAsync('intake_collect：十问缺项 → 不落盘（半份病历比�
   assert.equal(registry().patients.P001.visits || 0, 0, '未落盘就不得计入就诊次数');
 });
 
-await testAsync('intake_collect：十问齐全 → 落盘 + 注册表更新 + source 标记', async () => {
+await testAsync('intake_collect：必填齐全 → 落盘 + 注册表更新 + source 标记', async () => {
   const r = await tool('intake_collect').run({ patientId: 'P001', consultText: '首诊全文' },
     stub({ 'intake-extract': { complete: true, ...F } }));
   assert.equal(r.ok, true);
@@ -237,7 +251,7 @@ await testAsync('intake_collect：十问齐全 → 落盘 + 注册表更新 + so
   assert.equal(reg.patients.P001.visits, 1);
   assert.ok(reg.patients.P001.lastVisitAt, '末次就诊时间必须更新');
   const snap = JSON.parse(fs.readFileSync(path.join(TMP_HOME, 'intake', 'P001', snapshotFiles('P001')[0]), 'utf8'));
-  assert.equal(snap.zhenduan, F.zhenduan, '重大疾病诊断必须原样落盘');
+  assert.equal(snap.xianbingshi, F.xianbingshi, '重大疾病诊断（宫颈癌）必须原样落盘');
   assert.equal(snap.source, 'tcm-pack');
   assert.equal(snap.patientId, 'P001');
 });
@@ -386,7 +400,7 @@ await testAsync('缺项补齐后可正常落盘（不因一次缺项就永久卡
   const p = freshPack();
   await p.tools.find((t) => t.name === 'patient_register').run({ name: '张三' }, {});
   const miss = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '只说了一半' },
-    { llm: async () => ({ data: { complete: false, ...F, kouke: '', jiubing: '' } }) });
+    { llm: async () => ({ data: { complete: false, ...F, xianbingshi: '' } }) });
   assert.equal(fs.existsSync(file(path.join('intake', 'P001'))), false, '缺项时不应落盘');
   assert.ok(String(miss.output).includes('继续'), '应提示继续采集');
   const okRes = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '补齐了' },
@@ -399,8 +413,9 @@ await testAsync('可选字段（舌象/脉象）：采集到就落盘，缺了**
   const p = freshPack();
   await p.tools.find((t) => t.name === 'patient_register').run({ name: '王五' }, {});
   // ① 必填齐全但**没有**舌象/脉象 → 必须照样落盘（否则基层场景记不了病历）
+  const requiredOnly = { zhushu: F.zhushu, xianbingshi: F.xianbingshi };
   const r1 = await p.tools.find((t) => t.name === 'intake_collect').run({ patientId: 'P001', consultText: '首诊' },
-    { llm: async () => ({ data: { complete: true, ...F } }) });
+    { llm: async () => ({ data: { complete: true, ...requiredOnly } }) });
   assert.equal(r1.ok, true, '可选字段缺失不得挡住落盘');
   const f1 = fs.readdirSync(file(path.join('intake', 'P001'))).filter((x) => x.endsWith('.json'));
   assert.equal(f1.length, 1);
@@ -418,14 +433,15 @@ await testAsync('可选字段（舌象/脉象）：采集到就落盘，缺了**
   assert.equal(latest.maixiang, '脉弦细');
 });
 
-await testAsync('completeness 红线只看必填十项，不因可选字段缺失而拒绝', async () => {
+await testAsync('completeness 红线只看两项必填，不因可选字段缺失而拒绝', async () => {
   const c = pack.constraints.find((x) => x.kind === 'completeness');
-  assert.equal(c.fields.length, 10);
-  assert.ok(!c.fields.includes('shexiang'), '舌象不得进必填');
-  assert.ok(!c.fields.includes('maixiang'), '脉象不得进必填');
+  assert.deepEqual(c.fields, ['zhushu', 'xianbingshi']);
+  for (const opt of ['jiwangshi', 'jiazushi', 'guominshi', 'liuxingbingshi', 'tigejiancha', 'shexiang', 'maixiang', 'suifang']) {
+    assert.ok(!c.fields.includes(opt), `${opt} 不得进必填`);
+  }
   const partial = Object.fromEntries(c.fields.map((k) => [k, '']));
   partial.shexiang = '舌红苔黄';
-  assert.ok(missingFields(partial).length === 10, '只有可选字段填了，必填仍应全部算缺');
+  assert.equal(missingFields(partial).length, 2, '只有可选字段填了，两项必填仍应全部算缺');
 });
 
 // 收尾：清掉临时 home（测试全程不写真实 MINGDAO_HOME）

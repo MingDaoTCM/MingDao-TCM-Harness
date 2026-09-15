@@ -19,30 +19,35 @@ import path from 'node:path';
 
 export const apiVersion = 1;
 
-/** 十问字段（zhenduan 单列，见下方提示词硬规则：重大疾病诊断必须原样保留） */
+/**
+ * 病历字段（2026-09-15 按医师要求重构为门诊病历的书写结构，取代原「十问」）。
+ *
+ * 原十问（寒热/汗/头身/二便/饮食/胸腹/口渴/旧病）是**问诊采集清单**；
+ * 现在改成**病历结构**：主诉 + 现病史为必填，其余按实际接诊情况可选。
+ * 四诊信息（舌象/脉象）单独留字段——此前无处可放，医师写下的舌脉会被直接丢掉。
+ */
 export const FIELDS = {
-  zhushu: '主诉（含疾病诊断+主要症状）',
-  zhenduan: '诊断/重大疾病（西医诊断：癌症、肿瘤、糖尿病、心脏病等，必须原样记录，绝不允许省略）',
-  hanre: '寒热', han: '汗', toushen: '头身', erbian: '二便',
-  yinshi: '饮食', xiongfu: '胸腹', kouke: '口渴', jiubing: '旧病',
-  shexiang: '舌象（望诊，可选）',
-  maixiang: '脉象（切诊，可选）',
+  zhushu: '主诉（主要症状 + 持续时间，一句话）',
+  xianbingshi: '现病史（本次发病起因、经过、症状演变、诊治经过、现在症）',
+  jiwangshi: '既往史（既往疾病、手术、外伤、输血等）',
+  jiazushi: '家族史（家族中同类疾病或遗传病）',
+  guominshi: '过敏史（药物/食物/接触物过敏）',
+  liuxingbingshi: '流行病史（疫区接触、传染病接触、聚集发病等）',
+  tigejiancha: '体格检查（T/P/R/BP、心肺腹、专科体征等）',
+  shexiang: '舌象（望诊：舌质、舌体、舌苔）',
+  maixiang: '脉象（切诊：脉位、脉数、脉形）',
+  suifang: '随访（本次嘱托、复诊安排、需追踪的观察点）',
 };
 
 /**
- * 必填（`completeness` 红线校验的字段）—— 十问。
- * 舌象/脉象刻意**不在**必填里：脉象是医师指下感觉、舌象依赖拍照条件，
- * 强制作必填会让基层场景无法落盘病历（宁可少记，不可挡住记录）。
+ * 必填：**只有主诉与现病史**（医师明确要求）。
+ * 其余七项按实际接诊情况可选 —— 首诊来不及查体、患者说不清家族史，
+ * 都不该因此挡住病历落盘（宁可少记，不可挡住记录）。
  */
-export const REQUIRED_FIELDS = ['zhushu', 'zhenduan', 'hanre', 'han', 'toushen', 'erbian', 'yinshi', 'xiongfu', 'kouke', 'jiubing'];
+export const REQUIRED_FIELDS = ['zhushu', 'xianbingshi'];
 
-/**
- * 可选字段：**记录但不强制**。
- * 为什么要有它们：中医四诊是望闻问切，此前十个字段全来自"问"，
- * 医师写下的舌象/脉象在结构化时**无处可放、直接被丢掉** —— 那是实打实的信息损失。
- * 注意：复诊四态对比会把它们一并纳入（有则比、无则跳过），因为它们正是辨证的关键依据。
- */
-export const OPTIONAL_FIELDS = ['shexiang', 'maixiang'];
+/** 可选字段：记录但不强制（含四诊的舌象/脉象） */
+export const OPTIONAL_FIELDS = ['jiwangshi', 'jiazushi', 'guominshi', 'liuxingbingshi', 'tigejiancha', 'shexiang', 'maixiang', 'suifang'];
 
 /** 全部会落盘的字段（必填在前，可选在后） */
 export const ALL_FIELDS = [...REQUIRED_FIELDS, ...OPTIONAL_FIELDS];
@@ -328,7 +333,7 @@ export function createPack(ctx) {
     };
   }
 
-  // ───────── 工具二：十问采集 + 病理落盘（写） ─────────
+  // ───────── 工具二：病历采集 + 落盘（写） ─────────
   async function intakeCollect(args, toolCtx) {
     const pidRaw = String(args?.patientId || '').trim().toUpperCase();
     // 兜底校验（约束引擎之外的第二层）：没有确认过的病历号一律不写
@@ -351,11 +356,11 @@ export function createPack(ctx) {
     const prevSnapshot = prevFiles.length ? readSnapshot(prevFiles[0]) : null;
     const visitNo = prevFiles.length + 1;
 
-    const fieldList = 'zhushu主诉、zhenduan诊断(重大疾病如癌症/肿瘤/糖尿病/心脏病，必须原样保留，绝不省略或概括)、hanre寒热、han汗、toushen头身、erbian二便、yinshi饮食、xiongfu胸腹、kouke口渴、jiubing旧病'
-      + '；**可选两项**（有就原样记、没有就留空，**不计入 missing、不影响 complete**）：shexiang舌象（如"舌红苔黄"；若医师上传了舌象照片，可写"[舌象照片见附件]"并保留医师的文字描述）、maixiang脉象（医师指下所得，如"脉弦细"）';
+    const fieldList = 'zhushu主诉(主要症状+持续时间，一句话)、xianbingshi现病史(本次发病的起因/经过/症状演变/诊治经过/现在症，逐项写全)'
+      + '；**可选八项**（有就原样记、没有就留空，**不计入 missing、不影响 complete**）：jiwangshi既往史、jiazushi家族史、guominshi过敏史、liuxingbingshi流行病史、tigejiancha体格检查、shexiang舌象（如"舌红苔黄"；若医师上传了舌象照片，可写"[舌象照片见附件]"并保留文字描述）、maixiang脉象（如"脉弦细"）、suifang随访（嘱托/复诊安排/需追踪的观察点）';
     const extractUser = prevSnapshot
       ? `已知该患者上次快照：${JSON.stringify(Object.fromEntries(ALL_FIELDS.map((k) => [k, String(prevSnapshot[k] || '未提及')])))}。结合患者的复诊消息，生成本次完整快照：本次未变的项沿用上次表述，本次明确变化的项用新表述（如"睡眠好多了"）。字段：${fieldList}。输出 {"complete":true,...}；若仍缺**必填**项返回 {"complete":false,"missing":[...]}。缺项绝不编造。\n\n患者复诊消息：\n${consultText}`
-      : `从下面问诊对话提取中医问诊字段。字段：${fieldList}。规则：① 对话中提及的任何疾病诊断（如宫颈癌）必须原样填入 zhenduan，绝不允许过滤；② 任一**必填**项未明确出现就返回 {"complete":false,"missing":[...]}；必填齐全才返回 {"complete":true,...}；③ 缺项绝不编造；④ 舌象/脉象是可选，采集到就填、没采集到就留空。\n\n对话：\n${consultText}`;
+      : `从下面问诊对话提取门诊病历字段。字段：${fieldList}。规则：① 对话中提及的任何疾病诊断（尤其癌症/肿瘤/糖尿病/心脏病等重大疾病，如宫颈癌）必须**原样**写进 xianbingshi（或 zhushu），绝不允许过滤、省略或概括成"慢性病"，既往确诊同样是事实要原样保留；② 两项**必填**（zhushu/xianbingshi）任一未明确出现就返回 {"complete":false,"missing":[...]}；两项齐全才返回 {"complete":true,...}；③ 缺项绝不编造，绝不用"未见异常""大致正常"填空；④ 其余八项可选，采集到就填、没采集到就留空。\n\n对话：\n${consultText}`;
 
     const extracted = await llmJson(toolCtx, {
       system: '你是病历结构化提取器。只输出一个 JSON 对象。',
@@ -547,7 +552,7 @@ export function createPack(ctx) {
 
   /** 快照 → 中文字段（随访时间线用） */
   function pickFieldsCn(d) {
-    const CN = { zhushu: '主诉', zhenduan: '诊断', hanre: '寒热', han: '汗', toushen: '头身', erbian: '二便', yinshi: '饮食', xiongfu: '胸腹', kouke: '口渴', jiubing: '旧病', shexiang: '舌象', maixiang: '脉象' };
+    const CN = { zhushu: '主诉', xianbingshi: '现病史', jiwangshi: '既往史', jiazushi: '家族史', guominshi: '过敏史', liuxingbingshi: '流行病史', tigejiancha: '体格检查', shexiang: '舌象', maixiang: '脉象', suifang: '随访' };
     const out = /** @type {Record<string,any>} */ ({});
     for (const k of ALL_FIELDS) out[CN[k]] = d[k];
     return out;
@@ -595,8 +600,9 @@ export function createPack(ctx) {
       {
         name: 'intake_collect',
         description:
-          '十问采集与病历落盘：把本次问诊原文结构化成本次完整病历快照并写入 intake/<病历号>/。' +
-          '**必填十项齐全才落盘**；缺项会明确回报「请继续采集」而**绝不编造、不落盘半份病历**。' +
+          '病历采集与落盘：把本次接诊原文结构化成本次病历快照并写入 intake/<病历号>/。' +
+          '**主诉与现病史两项必填、齐全才落盘**；其余（既往史/家族史/过敏史/流行病史/体格检查/舌象/脉象/随访）按实际接诊情况可选。' +
+          '缺必填项会明确回报「请继续采集」而**绝不编造、不落盘半份病历**。' +
           '必须提供已由 patient_lookup 确认过的 patientId。',
         parameters: {
           type: 'object',
@@ -642,11 +648,17 @@ export function createPack(ctx) {
       // 红线一：不得跨患者串病历 —— 没有确认病历号的写入一律拒绝（比原来「仅同名多命中时拒绝」更强）
       { id: 'no-cross-patient-intake', kind: 'tool-arg-require', tool: 'intake_collect', requireArg: 'patientId', action: 'block' },
       { id: 'no-cross-patient-compare', kind: 'tool-arg-require', tool: 'visit_compare', requireArg: 'patientId', action: 'block' },
-      // 红线二：缺项绝不编造 —— 十问缺任一项即拒绝该结果，要求模型继续采集
+      // 红线二：缺项绝不编造 —— 主诉/现病史缺任一项即拒绝该结果，要求模型继续采集
       { id: 'ten-questions-complete', kind: 'completeness', tool: 'intake_collect', fields: REQUIRED_FIELDS, onMissing: 'reject' },
       // 红线三：不输出诊疗结论 —— 只判「疗效结论」，刻意不含「确诊为」：
       //   医师病历里会有既往确诊事实（如"2024 年确诊为宫颈癌"），拦它会把「重大疾病诊断必须原样保留」这条需求顶掉。
-      { id: 'no-efficacy-conclusion', kind: 'output-forbid', pattern: '有效|好转|治愈', action: 'block-and-rewrite' },
+      // pattern 收窄到**结论性表述**，不再单拦「好转」这一个词。
+      // 原因（医师实测反馈）：Dify 的问诊正文里"好转"是常见临床用词，且常是**事实转述**
+      // （"患者自述服药后好转"）。原来的 `有效|好转|治愈` 会频繁命中 → 触发改写 →
+      // 改写仍命中 → **正文被替换成合规文案，医师拿不到问诊结论**，这比措辞问题严重得多。
+      // action 由 block-and-rewrite 改为 warn：**正文永不丢失**，但命中会提示 + 进审计，
+      // 便于回头统计"哪些措辞值得收紧"。要恢复拦截只需把 warn 改回 block-and-rewrite。
+      { id: 'no-efficacy-conclusion', kind: 'output-forbid', pattern: '疗效(显著|良好|不错|明显|确切)|治疗有效|已(经)?治愈|完全治愈|痊愈|病情(明显)?好转|症状(明显)?好转|建议继续服用', action: 'warn' },
     ],
 
     promptSections: [

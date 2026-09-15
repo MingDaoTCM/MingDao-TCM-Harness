@@ -75,6 +75,19 @@ layer/packs/tcm/
 > **新患者永远建不出来（首诊直接卡死）**。这个缺口是写功能测试时暴露的，不是推理出来的。
 > 登记单独成显式动作，既补上链路，又不必放松"`intake_collect` 必须带已确认病历号"这条约束。
 
+### 病历字段（2026-09-15 按医师要求重构，取代原「十问」）
+
+| | 字段 |
+|---|---|
+| **必填（2）** | `zhushu` 主诉 · `xianbingshi` 现病史 |
+| **可选（8）** | `jiwangshi` 既往史 · `jiazushi` 家族史 · `guominshi` 过敏史 · `liuxingbingshi` 流行病史 · `tigejiancha` 体格检查 · `shexiang` 舌象 · `maixiang` 脉象 · `suifang` 随访 |
+
+原十问（寒热/汗/头身/二便/饮食/胸腹/口渴/旧病）是**问诊采集清单**，现在改成**门诊病历结构**。
+「重大疾病必须原样保留」这条硬规则从 `zhenduan` 移到了 `xianbingshi`，语义不变。
+
+**病历号不再由医师输入**：复诊由 `patient_lookup` 按姓名/出生年/性别提取历史病历号，
+初诊由 `patient_register` 自动分配；同名多命中一律返回候选请医师确认。
+
 ### 约束（三条红线，内核强制，不依赖模型自觉）
 
 | id | kind | 作用 |
@@ -82,7 +95,7 @@ layer/packs/tcm/
 | `no-cross-patient-intake` | `tool-arg-require` | `intake_collect` 缺 `patientId` → PreToolUse 阻断 |
 | `no-cross-patient-compare` | `tool-arg-require` | `visit_compare` 缺 `patientId` → 阻断 |
 | `ten-questions-complete` | `completeness` | 十问缺任一项 → PostToolUse 拒绝该结果 |
-| `no-efficacy-conclusion` | `output-forbid` | 输出含 `有效`/`好转`/`治愈` → `block-and-rewrite` |
+| `no-efficacy-conclusion` | `output-forbid` | 输出含**结论性**表述（治疗有效/已治愈/病情明显好转…）→ `warn`（提示 + 审计，**不替换正文**） |
 
 **关于 pattern 的一个刻意偏离**：`MIGRATION-DEYI-v0.5.md` 给的 pattern 是
 `有效|好转|治愈|确诊为`。本 Pack **不含 `确诊为`**，理由：
@@ -245,11 +258,21 @@ async chat(opts) {
 | # | 现象 | 根因（已定位到行） | 下游如何绕开 |
 |---|---|---|---|
 | 1 | `ctx.llm({model:'deepseek-v4-flash'})` 报 **`[deepseek-v4-flash] 响应解析失败`** | `src/providers/index.js` 的 `resolveProviderConfig`：`baseUrl = cfg.baseUrl \|\| <目标模型服务商预设>.baseUrl` —— **顶层 `baseUrl` 会压过目标模型自己服务商的地址**。而顶层 `baseUrl` 是给「当前 provider」用的（Dify），于是带着 DeepSeek 的 key 打到了 Dify 域名 | **`config.json` 不写顶层 `baseUrl`**；Dify 地址由 `dify.mjs` 自己兜底（`pc.baseUrl → config.tcm.difyBaseUrl → 默认值`）。见 §5.3 |
-| 2 | 医师只说「回访」时，Pack 工具**完全不在选项里** | `src/agent.js` 的 `toolsFor()`：只读阶段只放行 `READONLY_TIER_SET`（硬编码内置名）、已用过的工具、以及 MCP —— **`isRegisteredToolReadonly()` 明明存在却没被用**，于是 `readOnly:true` 的 Pack 工具被一并挡掉 | 无解（下游无法添加内核没给的工具）。**必须上游修**：只读阶段应改用 `isRegisteredToolReadonly(n)` |
+| 2 | 医师只说「回访」时，Pack 工具**完全不在选项里** | `src/agent.js` 的 `toolsFor()`：只读阶段只放行内置白名单 | ✅ **上游 v0.6.3 已修**：只读档判定方向反过来（只有「纯提问且无写意图」才进只读档），且**域内 Pack 在场时一律不进只读档**。实测「回访」现在会调用 `followup_board` |
 | 3 | 编排器收到全部工具后 **去 `read`/`ls` 翻代码库** | 不是内核缺陷，是接线方的设计失误：`provider.chat()` 收到的 `tools` 含全部内置工具 | `dify.mjs` 只把 `pack__*` 前缀的工具交给编排器（见 §4.2）。已加断言 ⑨⑩ 锁死 |
 
-> 第 2 条影响面最大：**任何"只读意图"的指令（回访、查病历、看趋势）都触发不了 Pack 工具**，
-> 而这类指令恰恰是中医随访场景的高频入口。上游若不修，路线 A 就只能覆盖"带写意图"的指令。
+> 第 2 条影响面最大（任何「只读意图」的指令都触发不了 Pack 工具），**上游 v0.6.3 已修**。
+
+**第 4 条缺口（视觉门控）也已由 v0.6.3 修好**，官方给出两条路，本项目走推荐的 B：
+
+```js
+// layer/providers/dify.mjs
+export const supportsVision = true;   // 内核据此放行图片附件
+```
+
+配套实现（同一文件）：把内核发来的多模态数组解析出图片 → 上传 Dify
+（`POST /v1/files/upload`）→ 随 `chat-messages` 的 `files` 一起提交。
+照片传不上去**不挡住问诊**（正文照常，只是这次没有图片）。
 
 ### 5.3 一条必须遵守的配置约定
 

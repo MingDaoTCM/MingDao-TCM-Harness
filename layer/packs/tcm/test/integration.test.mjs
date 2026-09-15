@@ -57,9 +57,11 @@ const { listCacheStats } = await import(path.join(KERNEL, 'src/cachestats.js'));
 const { buildSystemPrompt, packPromptBlock } = await import(path.join(KERNEL, 'src/prompts.js'));
 
 const F = {
-  zhushu: '失眠多梦三个月', zhenduan: '宫颈癌（2024 年确诊，术后）', hanre: '手足心热',
-  han: '夜间盗汗', toushen: '头晕', erbian: '小便偏黄', yinshi: '纳可',
-  xiongfu: '胸闷', kouke: '口干', jiubing: '高血压十年',
+  zhushu: '失眠多梦三个月',
+  xianbingshi: '三月前无诱因出现入睡困难，伴多梦易醒；既往 2024 年确诊为宫颈癌，术后规律复查。',
+  jiwangshi: '宫颈癌术后；高血压十年',
+  shexiang: '舌红苔黄',
+  maixiang: '脉弦细',
 };
 
 console.log(`\n[集成] 真实 agent 循环（内核：${KERNEL}）`);
@@ -137,7 +139,7 @@ check('工具副作用真的落了盘：注册表 + 病历快照', () => {
   const files = fs.readdirSync(path.join(HOME, 'intake', 'P001')).filter((f) => f.endsWith('.json'));
   assert.equal(files.length, 1, '应恰好落盘一份病历快照');
   const snap = JSON.parse(fs.readFileSync(path.join(HOME, 'intake', 'P001', files[0]), 'utf8'));
-  assert.equal(snap.zhenduan, F.zhenduan, '重大疾病诊断必须原样落盘');
+  assert.equal(snap.xianbingshi, F.xianbingshi, '重大疾病诊断（宫颈癌）必须原样落盘');
 });
 
 check('最终正文正常返回（工具调用后模型仍能产出总结）', () => {
@@ -168,10 +170,12 @@ const packBlock = packPromptBlock();
 check('域提示词段真的被注入系统提示（不是只挂在 mountPacks 的返回值里）', () => {
   assert.ok(packBlock.includes('<pack_rules>'), 'packPromptBlock 应产出 <pack_rules> 包裹');
   assert.ok(packBlock.includes('pack="tcm" id="tcm-domain"'), '应带 tcm 段标签');
-  for (const kw of ['缺项绝不编造', '不输出诊疗结论', '不得跨患者串病历', '判断权始终归属执业医师']) {
+  for (const kw of ['缺项绝不编造', '不作疗效结论', '不得跨患者串病历', '判断权始终归属执业医师']) {
     assert.ok(sysPrompt.includes(kw), `系统提示应含「${kw}」`);
   }
-  assert.ok(sysPrompt.includes('zhenduan'), '十问字段说明应进系统提示');
+  for (const f of ['zhushu', 'xianbingshi', 'shexiang', 'maixiang']) {
+    assert.ok(sysPrompt.includes(f), `病历字段 ${f} 应进系统提示`);
+  }
   assert.ok(sysPrompt.includes('patient_lookup'), '工作流程应告诉模型先调 patient_lookup');
 });
 
@@ -207,9 +211,11 @@ const agent2 = createAgent({
 });
 const res2 = await agent2.runTurn([{ role: 'user', content: '复诊看看' }]);
 
-check('★ 含「好转」的正文被内核红线改写（Dify 类 provider 同样受管）', () => {
-  assert.ok(rewriteCalls.length >= 1, '应触发一次改写请求');
-  assert.ok(!/好转/.test(String(res2.text || '')), `最终正文不应含「好转」，实际：${res2.text}`);
+// 2026-09-15 起 action 由 block-and-rewrite 改为 warn（医师实测反馈：正文不能被替换掉）
+check('★ 命中结论性措辞时正文**不被替换**，只提示 + 记审计', () => {
+  assert.equal(rewriteCalls.length, 0, 'warn 不应再触发改写调用');
+  assert.ok(/好转/.test(String(res2.text || '')), 'Dify 的正文必须原样交给医师，不能被合规文案顶掉');
+  assert.ok(String(res2.note || '').includes('no-efficacy-conclusion'), `应带提示，实际 note=${res2.note}`);
 });
 
 check('红线命中写进了审计（受监管场景要能回答「红线何时被触发」）', () => {

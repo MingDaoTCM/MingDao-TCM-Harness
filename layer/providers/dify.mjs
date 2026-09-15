@@ -43,6 +43,16 @@ const DECIDE_TAIL = 24;
  */
 const PACK_TOOL_PREFIX = 'pack__';
 
+/**
+ * 声明本 Provider 支持视觉（上游 v0.6.3 的「路 B」，官方推荐）。
+ * 内核的图片门控会咨询自定义 Provider 的这个导出（src/providers/index.js），
+ * 于是医师上传的舌象照片不会再被 `buildUserContent` 拒收。
+ *
+ * 注意这背后要有真本事：本文件负责把图片**上传给 Dify** 并随 query 一起提交
+ * （见 chat() 里的 files 处理），Dify 应用侧需开启视觉。
+ */
+export const supportsVision = true;
+
 const FIELD_LABELS = {
   zhushu: '主诉（含疾病诊断+主要症状）',
   zhenduan: '诊断/重大疾病（必须原样记录，绝不省略）',
@@ -113,6 +123,92 @@ export function createProvider(pc) {
       apiKey: String(o.apiKey || creds.deepseek || ''),
       isDeepseek: /(^|\.)api\.deepseek\.com$/.test(baseUrl.replace(/^https?:\/\//, '').split('/')[0]),
     };
+  }
+
+  /**
+   * 把一条消息的 content 拆成「纯文本 + 图片 dataURL 列表」。
+   * 内核在模型声明 supportVision 后会发多模态数组（`[{type:'text'},{type:'image_url'}]`），
+   * 直接 `String(content)` 会得到 "[object Object]" —— 必须显式解析。
+   */
+  function splitParts(content) {
+    if (typeof content === 'string') return { text: content, images: [] };
+    if (!Array.isArray(content)) return { text: '', images: [] };
+    const texts = [];
+    const images = [];
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'text') texts.push(String(part.text || ''));
+      else if (part.type === 'image_url') {
+        const url = String(part.image_url?.url || '');
+        if (url) images.push(url);
+      }
+    }
+    return { text: texts.join('\n'), images };
+  }
+
+  /** dataURL → Blob（Node 18+ 原生 Blob/FormData，零依赖） */
+  function dataUrlToBlob(dataUrl) {
+    const m = /^data:([^;,]+);base64,(.*)$/s.exec(String(dataUrl));
+    if (!m) return null;
+    return new Blob([Buffer.from(m[2], 'base64')], { type: m[1] });
+  }
+
+  /** 把图片上传给 Dify，返回 upload_file_id（Dify 的 files 只认它或可抓取的 URL） */
+  async function uploadToDify(dataUrl, signal) {
+    const blob = dataUrlToBlob(dataUrl);
+    if (!blob) return null;
+    const fd = new FormData();
+    fd.append('file', blob, `tongue-${Date.now()}.jpg`);
+    fd.append('user', 'mdh-dify-main');
+    const r = await fetch(`${difyBaseUrl}/v1/files/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${difyKey}` },
+      body: fd,
+      signal,
+    });
+    if (!r.ok) {
+      const raw = await r.text().catch(() => '');
+      throw new Error(`舌象照片上传失败：HTTP ${r.status} ${raw.slice(0, 160)}`);
+    }
+    const j = await r.json().catch(() => null);
+    return j?.id ? String(j.id) : null;
+  }
+
+  /**
+   * 红线改写请求要交给 **DeepSeek**，不能交给 Dify。
+   *
+   * 为什么：内核在 output-forbid 命中 block-and-rewrite 时会调用 `provider.chat()`
+   * 让我们「改写掉违规措辞」。但我们的 Provider 会把请求转给 Dify 中医工作流 ——
+   * 那个工作流本身就是产出这类措辞的，让它改写等于让它再写一遍，改完仍然命中。
+   * 纯文本改写是通用任务，用关思考的 DeepSeek 更合适也更便宜。
+   *
+   * 识别依据是内核生成的那句提示（`命中...领域红线`），tools 为空。
+   */
+  function isRewriteRequest(messages, tools) {
+    if (Array.isArray(tools) && tools.length) return false;
+    const last = [...(Array.isArray(messages) ? messages : [])].reverse().find((m) => m?.role === 'user');
+    return /命中了?领域红线|改写成/.test(splitParts(last?.content).text);
+  }
+
+  /** 用 DeepSeek 做一次纯文本改写（关思考、不流式、不归 Pack 账——它是内核触发的合规动作） */
+  async function rewriteWithDeepseek(messages, signal) {
+    const o = orchestrator();
+    if (!o.apiKey) return null;
+    const res = await fetch(`${o.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${o.apiKey}` },
+      body: JSON.stringify({
+        model: o.model,
+        messages: (Array.isArray(messages) ? messages : []).map((m) => ({ role: m.role, content: splitParts(m.content).text })),
+        temperature: 0,
+        max_tokens: 2048,
+        ...(o.isDeepseek ? { thinking: { type: 'disabled' } } : {}),
+      }),
+      signal,
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    return { text: String(d?.choices?.[0]?.message?.content || '').trim(), usage: d?.usage || null };
   }
 
   /**
@@ -198,8 +294,24 @@ export function createProvider(pc) {
       const messages = Array.isArray(opts.messages) ? opts.messages : [];
       const tools = Array.isArray(opts.tools) ? opts.tools : [];
       const lastUser = [...messages].reverse().find((m) => m?.role === 'user');
-      const query = String(lastUser?.content || '').trim();
-      if (!query) throw new Error('[dify] 没有可发送的用户消息');
+
+      // —— ⓪ 内核的红线改写请求：交给 DeepSeek，不要转给 Dify（见 isRewriteRequest 的说明）——
+      if (isRewriteRequest(opts.messages, tools)) {
+        try {
+          const rw = await rewriteWithDeepseek(opts.messages, opts.signal);
+          if (rw?.text) {
+            return { text: rw.text, reasoning: '', toolCalls: null, usage: rw.usage, finish: 'stop' };
+          }
+        } catch (/** @type {any} */ e) {
+          console.warn(`[dify] 红线改写调用失败，交由内核按原策略处理：${e?.message || e}`);
+        }
+        // 改写不成 → 让 Dify 兜底（内核仍会二次校验）
+      }
+
+      // 多模态：内核在 supportsVision 下会发数组，直接 String() 会得到 "[object Object]"
+      const parts = splitParts(lastUser?.content);
+      const query = String(parts.text || '').trim();
+      if (!query && !parts.images.length) throw new Error('[dify] 没有可发送的用户消息');
 
       // —— ① 工具编排：判定要调工具就交回内核执行；判定失败一律回落 ——
       // 只把垂域工具交给编排器（见 PACK_TOOL_PREFIX 的说明）；没有垂域工具就整段跳过，
@@ -232,7 +344,19 @@ export function createProvider(pc) {
         }
       }
 
+      // 舌象照片：先上传拿 upload_file_id，再随 query 一起提交给 Dify（Dify 应用侧需开启视觉）
+      const files = [];
+      for (const dataUrl of parts.images) {
+        try {
+          const id = await uploadToDify(dataUrl, opts.signal);
+          if (id) files.push({ type: 'image', transfer_method: 'local_file', upload_file_id: id });
+        } catch (/** @type {any} */ e) {
+          // 照片传不上去**不能挡住问诊**：正文照常进行，只是这次没有图片
+          console.warn(`[dify] ${e?.message || e}（本次问诊继续，仅缺图片）`);
+        }
+      }
       const dbody = { inputs: {}, query: difyQuery, response_mode: 'streaming', user: 'mdh-dify-main' };
+      if (files.length) dbody.files = files;
       if (conversationId) dbody.conversation_id = conversationId;
       const dres = await fetch(`${difyBaseUrl}/v1/chat-messages`, {
         method: 'POST',

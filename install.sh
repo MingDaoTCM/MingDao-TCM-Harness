@@ -36,12 +36,13 @@ echo "   ✓ 已安装 Provider: $(cd "$HERE/layer/providers" && ls -1 *.mjs | t
 # 3b) 装上 Pack 不是零影响，必须当场说清楚（否则会以为"没接线就等于没装"）
 if [ -d "$HOME_DIR/packs/tcm" ]; then
   echo
-  echo "   ⚠ 注意：Pack 已装好，其中「不输出诊疗结论」这条红线**立即生效**。"
-  echo "     约束作用在 agent 正文上、与 provider 无关，所以**当前 Dify 问诊的输出也被它管住了**："
-  echo "     正文里出现 有效 / 好转 / 治愈 时会被内核自动改写一次（改写请求计入本回合用量），"
-  echo "     改写后仍命中则替换为合规文案并写审计。这是刻意的（红线从提示词劝告变成内核强制）。"
-  echo "     另外两条红线（缺 patientId / 十问缺项）只作用于 Pack 自己的工具，"
-  echo "     而工具在完成架构接线前不会被调用 —— 详见 layer/packs/tcm/README.md §二。"
+  echo "   ⚠ 注意：Pack 已装好，其中「不作疗效结论」这条红线**立即生效**。"
+  echo "     约束作用在 agent 正文上、与 provider 无关，所以**Dify 问诊的输出也被它管住了**："
+  echo "     正文里出现结论性表述（治疗有效 / 已治愈 / 病情明显好转 …）时会**提示并写审计**，"
+  echo "     但**不会替换掉正文** —— 正文是医师要看的，不能因为一个词就丢掉（2026-09-15 起由"
+  echo "     block-and-rewrite 改为 warn，起因是医师实测反馈「已拦截」导致拿不到问诊结论）。"
+  echo "     另外两条红线（缺 patientId / 主诉·现病史缺项）只作用于 Pack 自己的工具。"
+  echo "     详见 layer/packs/tcm/README.md §二。"
 fi
 
 # 4) 预设（如有）
