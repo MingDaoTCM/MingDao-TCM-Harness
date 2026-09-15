@@ -24,25 +24,64 @@ SSE：banner / text / reasoning / code / tool / toolDenied / todo / usage / ask 
 
 好处：内核升级只需要重新确认那套 SSE 契约，不必合并 100+ 提交。
 
-## 怎么跑
+## 怎么跑（一键脚本）
 
 ```bash
-# 1) 先按仓库根 install.sh 把 tcm 层装进一个 MINGDAO_HOME
-MINGDAO_HOME=~/.deyi-tcm bash install.sh
-
-# 2) 起内核（在 MingDao-Harness 检出目录下；端口随便挑一个空的）
-MINGDAO_HOME=~/.deyi-tcm node src/cli.js web 3821
-
-# 3) 起本代理（默认连 3821，界面在 3830）
-node tools/tcm-ui/server.mjs
-#   自定义： --target http://127.0.0.1:3820 --port 3831
-#   内核若配了访问令牌： MINGDAO_UI_TOKEN=xxx node tools/tcm-ui/server.mjs
+bash tools/tcm-ui/tcm-ui.sh start      # 启动内核 + 界面（已在跑就跳过）
+bash tools/tcm-ui/tcm-ui.sh status     # 看状态与地址
+bash tools/tcm-ui/tcm-ui.sh stop       # 停止两者
+bash tools/tcm-ui/tcm-ui.sh restart    # 重启
+bash tools/tcm-ui/tcm-ui.sh logs       # 跟踪日志（Ctrl+C 退出）
 ```
 
-然后浏览器打开 **http://127.0.0.1:3830**。
+首次运行会生成配置 `~/.deyi-tcm-ui.conf`（内核目录 / MINGDAO_HOME / 端口），可手工改：
 
-> 代理只监听 `127.0.0.1`，`/api/*` **不缓冲地透传**（SSE 必须逐块到达，否则流式问诊会变成
-> "等全部生成完再一次性显示"）。访问令牌只在代理内部加，浏览器永远拿不到它。
+```bash
+MINGDAO_KERNEL="/path/to/MingDao-Harness"   # 自动发现时会**按 package.json 版本挑最新的**
+MINGDAO_HOME="/home/you/.deyi-tcm"
+KERNEL_PORT=3821
+UI_PORT=3830
+```
+
+> **为什么发现要按版本挑**：机器上常同时存在旧克隆与新快照（实测：`MingDao-Harness`
+> 是 v0.4.5，`MingDao-Harness-v0.6.3` 才是当前上游）。按目录名的字典序会挑错。
+>
+> 日志与 pid 落在 `~/.deyi-tcm-ui/`。
+
+## 开机自启
+
+```bash
+bash tools/tcm-ui/install-autostart.sh            # 安装（优先 systemd --user）
+bash tools/tcm-ui/install-autostart.sh --status   # 看当前用哪种方式
+bash tools/tcm-ui/install-autostart.sh --uninstall
+```
+
+优先装成 **systemd 用户服务**（崩溃可查、`systemctl --user status` 可看）；
+没有 systemd --user 的环境回落到 XDG autostart（登录时拉起一次，不自动重启）。
+
+```bash
+systemctl --user status  deyi-tcm-ui.service
+systemctl --user restart deyi-tcm-ui.service
+systemctl --user disable --now deyi-tcm-ui.service   # 关掉自启
+```
+
+> 两点须知：
+> 1. systemd --user 默认在**登录后**运行；想让它无人登录也常驻，需要一次性
+>    `sudo loginctl enable-linger $USER`。
+> 2. 服务启动的是**本机回环**地址（内核 127.0.0.1:3821、界面 127.0.0.1:3830），
+>    不对外网开放。界面里的访问令牌只在代理内部加，浏览器拿不到。
+
+<details>
+<summary>手动跑（不用脚本时）</summary>
+
+```bash
+# 内核（MingDao-Harness 检出目录下）
+MINGDAO_HOME=~/.deyi-tcm node src/cli.js web 3821
+# 薄代理（本仓库目录下）
+node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830
+```
+
+</details>
 
 ## 界面上有什么
 
@@ -70,5 +109,7 @@ node tools/tcm-ui/server.mjs
 
 | 文件 | 说明 |
 |---|---|
+| `tcm-ui.sh` | 一键启停（start/stop/restart/status/logs）；幂等，端口健康检查，按版本发现内核 |
+| `install-autostart.sh` | 开机自启安装/卸载/查状态（systemd --user 优先，XDG autostart 兜底） |
 | `server.mjs` | 薄代理 + 静态服务（零依赖，`node:http`）；含目录穿越防护、SSE 不缓冲透传 |
 | `public/index.html` | 问诊界面（单文件，无构建步骤） |
