@@ -25,7 +25,7 @@ layer/packs/tcm/
   pack.json              # manifest：apiVersion / engines / permissions / contributes
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
-  test/pack.test.mjs        # 42 项：契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
+  test/pack.test.mjs        # 45 项：契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
   test/integration.test.mjs # 11 项：真实 agent 循环 + 提示词注入 + 入账 + 输出红线
   README.md                 # 本文件
 ```
@@ -298,7 +298,7 @@ Provider 再从中取回、拼进 Dify 的 query（否则会重演「四诊标�
 # ① 静态校验（下游 CI 门禁，应退出 0）
 mingdao pack verify layer/packs/tcm
 
-# ② 单元 + 红线 + 功能 + 错误路径测试（42 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
+# ② 单元 + 红线 + 功能 + 错误路径测试（45 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
 # ③ 端到端集成测试（11 项；真实 agent 循环 + 提示词注入 + 输出红线）

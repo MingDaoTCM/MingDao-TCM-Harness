@@ -82,7 +82,9 @@ MINGDAO_HOME=~/.deyi-tcm node src/cli.js web 3821
 
 ## 与上游的版本关系
 
-- 本层兼容 **MingDao-Harness v0.4.5** 的扩展点（自定义 Provider / 预设 / config.tools）；
+- 本层当前对齐 **MingDao-Harness v0.6.4**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
+- 已在 v0.6.4 内核下验证：`pack verify`（静态）、`pack.test.mjs`（45 项）、`integration.test.mjs`（11 项）**全部通过，无代码改动**；
+- 接入的扩展点：垂域 **Pack（Pack API v1：tools / constraints / promptSections）** + 自定义 **Provider（dify.mjs，含 `supportsVision`）**；
 - 内核升级后如扩展点有变，本层适配后再跟版本；
 - **内核 bug 在上游修，本层不重复造**。
 
