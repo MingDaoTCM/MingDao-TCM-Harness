@@ -22,6 +22,9 @@ credentials.json
 backup-to-nas.log
 node_modules/
 
+# —— 桌面版打包产物（安装包体积大，不入库）——
+tools/tcm-ui/desktop/dist/
+
 # —— 系统 / 编辑器 ——
 .DS_Store
 *.swp
