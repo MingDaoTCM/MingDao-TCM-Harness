@@ -36,20 +36,27 @@ function loadIcon(file) {
   try { const img = nativeImage.createFromPath(p); return img.isEmpty() ? null : img; } catch { return null; }
 }
 
+/**
+ * 报错出口。`silent`（冒烟模式）时只打日志、不弹窗 ——
+ * 无头 CI（xvfb）里弹一个模态对话框会把整条流水线挂住，而冒烟要的只是"非 0 退出"。
+ */
+function fail(msg, silent) {
+  if (silent) { console.error(`[smoke] ${msg}`); return; }
+  dialog.showErrorBox(APP_NAME, msg);
+}
+
 /** 起内核 + 问诊台（逻辑全在 orchestrator，这里只负责报错与退出） */
-async function boot() {
+async function boot({ silent = false } = {}) {
   const appRoot = resolveAppRoot({ here: __dirname, resourcesPath: process.resourcesPath, packaged: app.isPackaged });
   const kernelRoot = resolveKernelRoot({ appRoot, resourcesPath: process.resourcesPath });
   if (!kernelRoot) {
-    dialog.showErrorBox(APP_NAME, '找不到 MingDao-Harness 内核。\n可将内核检出目录设进环境变量 MINGDAO_KERNEL 后重试。');
-    app.quit();
+    fail('找不到 MingDao-Harness 内核。\n可将内核检出目录设进环境变量 MINGDAO_KERNEL 后重试。', silent);
     return null;
   }
   try {
     return await startApp({ appRoot, kernelRoot, quiet: true });
   } catch (e) {
-    dialog.showErrorBox(APP_NAME, `启动失败：${e?.message || e}`);
-    app.quit();
+    fail(`启动失败：${e?.message || e}`, silent);
     return null;
   }
 }
@@ -104,10 +111,15 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => { if (running) show(running.uiUrl); });
 
   app.whenReady().then(async () => {
-    running = await boot();
-    if (!running) return;
+    running = await boot({ silent: smoke });
+    if (!running) {
+      // 冒烟必须**非 0 退出**：CI 只认退出码，弹窗在无头环境里等于挂住
+      if (smoke) { console.error('MINGDAO_TCM_DESKTOP_SMOKE_FAILED'); app.exit(1); }
+      else app.quit();
+      return;
+    }
     if (smoke) {
-      // 自检：证明「内核+问诊台都起来了」再退出，不建窗口
+      // 自检：证明「内核 + 问诊台都真起来了」再退出，不建窗口（CI 用 xvfb 跑它）
       console.log('MINGDAO_TCM_DESKTOP_SMOKE_OK');
       await running.close();
       app.exit(0);

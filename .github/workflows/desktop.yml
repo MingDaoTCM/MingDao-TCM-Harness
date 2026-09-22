@@ -1,0 +1,163 @@
+# 明道中医 · 问诊台 桌面版打包 —— 与上游 MingDao-Harness/.github/workflows/desktop.yml 同构
+#
+# 触发：
+#   · 打 tag（v*）      → 三平台构建 + 自动创建 GitHub Release（安装包长期保留在 Release 上）
+#   · workflow_dispatch → 只构建、只上传工件，**不发版**（用于验证签名/公证与构建是否正常）
+#
+# 与上游的差别只有两处，都因为本项目是"下游层"：
+#   ① 要**同时 checkout 内核**：electron-builder.yml 的 extraResources 依赖
+#      「内核与本仓库同级」这个相对布局（见该文件头部说明）。内核是公开仓库，不需要额外凭据。
+#   ② 冒烟用本项目自己的开关 MINGDAO_TCM_DESKTOP_SMOKE（内核那个是 MINGDAO_DESKTOP_SMOKE）。
+name: Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # 发 Release 需要
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            args: --linux AppImage deb
+            name: linux-x64
+          - os: windows-latest
+            args: --win nsis
+            name: win-x64
+          # 与上游同口径：macos-13（Intel）公共池排队数小时，改用 macos-14(arm64) + Rosetta 交叉构建 x64
+          # zip 供自动更新（若将来接入），dmg 供手动安装
+          - os: macos-14
+            args: --mac dmg zip --x64
+            name: mac-x64
+          - os: macos-14
+            args: --mac dmg zip
+            name: mac-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      # 代码签名/公证（可选）：仓库 Secrets 配了就生效，没配就出未签名产物
+      # 需要的 Secrets 名与上游完全一致：CSC_LINK / CSC_KEY_PASSWORD（+ macOS 公证三件套
+      # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID；Windows 走 Azure Trusted Signing 的 AZURE_*）
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    steps:
+      - name: Checkout（本仓库 → tcm/）
+        uses: actions/checkout@v4
+        with:
+          path: tcm
+
+      # 必须与本仓库**同级**：electron-builder.yml 里 extraResources 的
+      # `from: ../../../../MingDao-Harness/src` 就靠这个布局（打包后落到 resources/kernel/）
+      - name: Checkout（内核 → MingDao-Harness/，与 tcm/ 同级）
+        uses: actions/checkout@v4
+        with:
+          repository: MingDaoTCM/MingDao-Harness
+          path: MingDao-Harness
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 版本号对齐 tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: tcm/tools/tcm-ui/desktop
+        shell: bash
+        run: |
+          V="${{ github.ref_name }}"; V="${V#v}"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
+          echo "版本号 → $V"
+
+      - name: 安装 Electron 依赖（npmmirror 镜像）
+        working-directory: tcm/tools/tcm-ui/desktop
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: npm install --no-audit --no-fund
+
+      - name: 打包
+        working-directory: tcm/tools/tcm-ui/desktop
+        shell: bash
+        run: |
+          # 未配置的 Secrets 会被 Actions 替换成**空字符串**，而 electron-builder 把空串
+          # 当成有效证书路径 → 构建直接报错。先清掉真·空的（上游踩过，照抄）。
+          for k in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+            if [ -z "${!k}" ]; then unset "$k"; fi
+          done
+          # Apple 证书只给 macOS 用：非 macOS 腿强制清空 CSC_*，
+          # 否则 electron-builder 会拿 Apple 证书给 Windows exe 做 Authenticode「签名」（比不签更糟）
+          if [ "$RUNNER_OS" != "macOS" ]; then unset CSC_LINK CSC_KEY_PASSWORD; fi
+          npx electron-builder ${{ matrix.args }} --publish never
+
+      # 打包冒烟：真跑**打包产物**的主进程（xvfb 无窗口）。它会把内置内核与问诊台都拉起来，
+      # 起得来才算"这个包真的能双击"。只跑 Linux 腿：路径/导入类错误平台无关，一个平台足以拦截。
+      - name: 打包冒烟（主进程模块求值 + 内核&问诊台起来，xvfb）
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          MINGDAO_TCM_DESKTOP_SMOKE: '1'
+          MINGDAO_HOME: ${{ runner.temp }}/mingdao-home
+        run: |
+          cd tcm/tools/tcm-ui/desktop
+          test -x dist/linux-unpacked/mingdao-tcm || { echo "缺少 dist/linux-unpacked/mingdao-tcm"; ls -la dist; exit 1; }
+          xvfb-run -a dist/linux-unpacked/mingdao-tcm --no-sandbox
+
+      - name: 上传工件
+        uses: actions/upload-artifact@v4
+        with:
+          name: mingdao-tcm-desktop-${{ matrix.name }}
+          path: |
+            tcm/tools/tcm-ui/desktop/dist/*.AppImage
+            tcm/tools/tcm-ui/desktop/dist/*.deb
+            tcm/tools/tcm-ui/desktop/dist/*.exe
+            tcm/tools/tcm-ui/desktop/dist/*.dmg
+            tcm/tools/tcm-ui/desktop/dist/*.zip
+          if-no-files-found: warn
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # 只允许 tag 触发的构建发版；workflow_dispatch 用于验证构建，绝不创建 Release
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下载全部工件
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 发布到 GitHub Release（清空旧资产后整批覆盖）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+          # mac 的 zip 文件名可能含空格 → 按行读成数组再传参（不能直接 $FILES 分词）
+          mapfile -t FILES < <(find artifacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \) | sort)
+          if [ "${#FILES[@]}" -eq 0 ]; then echo "::error title=no-artifacts::没有可发布的安装包"; exit 1; fi
+          echo "待上传："; printf '%s\n' "${FILES[@]}"
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            echo "Release 已存在：先清空旧资产"
+            while IFS= read -r n; do
+              gh release delete-asset "$TAG" "$n" -R "$REPO" --yes >/dev/null 2>&1 || true
+            done < <(gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name' 2>/dev/null || true)
+            if ! gh release upload "$TAG" "${FILES[@]}" -R "$REPO" --clobber > /tmp/up.out 2>&1; then
+              echo "::error title=gh-release-upload::$(tail -c 1500 /tmp/up.out)"; exit 1
+            fi
+            echo "上传成功"
+          else
+            echo "Release 不存在：创建并上传"
+            if ! gh release create "$TAG" "${FILES[@]}" -R "$REPO" --generate-notes --title "$TAG" > /tmp/cr.out 2>&1; then
+              echo "::error title=gh-release-create::$(tail -c 1500 /tmp/cr.out)"; exit 1
+            fi
+            echo "创建成功"
+          fi

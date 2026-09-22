@@ -1,0 +1,44 @@
+# 明道中医 · 问诊台 —— 门禁（与上游 ci.yml 同构：也都需要把内核检出到同级）
+#
+# 跑的是本项目的 7 档门禁（pack verify / pack / integration / dify / tcm-data / ui-wiring /
+# desktop-orchestrator）。最后那档会**真起内核 + 真起问诊台**，所以它不是纯静态检查。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout（本仓库 → tcm/）
+        uses: actions/checkout@v4
+        with:
+          path: tcm
+
+      # 与 desktop.yml 同理：内核必须与本仓库同级（desktop-orchestrator 测试也会用它）
+      - name: Checkout（内核 → MingDao-Harness/，与 tcm/ 同级）
+        uses: actions/checkout@v4
+        with:
+          repository: MingDaoTCM/MingDao-Harness
+          path: MingDao-Harness
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 门禁（7 档）
+        working-directory: tcm
+        env:
+          MINGDAO_KERNEL: ${{ github.workspace }}/MingDao-Harness
+        run: |
+          set -e
+          node "$MINGDAO_KERNEL/src/cli.js" pack verify layer/packs/tcm
+          node layer/packs/tcm/test/pack.test.mjs
+          node layer/packs/tcm/test/integration.test.mjs
+          node layer/providers/test/dify.test.mjs
+          node tools/tcm-ui/test/tcm-data.test.mjs
+          node tools/tcm-ui/test/ui-wiring.test.mjs
+          node tools/tcm-ui/test/desktop-orchestrator.test.mjs

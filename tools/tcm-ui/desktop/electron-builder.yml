@@ -71,11 +71,19 @@ nsis:
 mac:
   target:
     - dmg
+    - zip # 自动更新需要 zip（将来接入 electron-updater 时）；dmg 供手动安装
   category: public.app-category.medical
   icon: build/icon.png
+  # 签名 + 公证：CI 里由 Secrets 驱动（CSC_LINK / CSC_KEY_PASSWORD 自动签名；
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD 走 notarytool 公证并 stapling）。
+  # 未配置 Secrets 时这些字段不生效 → 构建回退未签名产物（行为与上游一致）。
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # 与上游同一个 Apple 团队（MingDaoTCM）。换账号要改这里 ——
+  # electron-builder 24.x 不读 APPLE_TEAM_ID 环境变量，notarytool 只认配置文件里的值。
+  notarize:
+    teamId: 3VZLHJCG48
 dmg:
   artifactName: mingdao-tcm-${version}-${arch}.${ext}
