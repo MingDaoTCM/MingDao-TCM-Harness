@@ -84,8 +84,15 @@ export function renderVisitBlock(snapshot) {
 /** 复诊四态（顺序固定，供提示词与渲染共用） */
 export const FOUR_STATES = ['消失', '减轻', '无变化', '加重'];
 
-/** 超期未复诊阈值（天） */
+/** 超期未复诊阈值（天）：达到它就进「超期」提醒 */
 export const OVERDUE_DAYS = 14;
+
+/**
+ * 临期提前量（天）：距超期不足这么多天时进「临期」提醒。
+ * 为什么除了「超期」还要「临期」：等到已经超期才提醒，医师就没有提前量了 ——
+ * 主动提醒的价值恰恰在于**还没超期时就能把复诊排上**。
+ */
+export const DUE_SOON_DAYS = 3;
 
 // ─────────────────────────── 纯函数（可单测，不碰 IO） ───────────────────────────
 
@@ -95,6 +102,30 @@ export function daysSince(iso, now = Date.now()) {
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? Math.floor((now - t) / 86400000) : null;
 }
+
+/**
+ * 随访状态：`'overdue'`（已超期）/ `'due-soon'`（临期）/ `'ok'`（正常）/ `'none'`（从未就诊）。
+ *
+ * **这是「谁该随访」的唯一判定处**：回访看板（`followup_board`）与问诊台的提醒条都必须走它。
+ * 为什么收在一处：两处各写一遍天数比较，改了阈值或差一天就会对不上 ——
+ * 医师会在两个界面看到**不同的「超期人数」**，而且都不报错。
+ * @param {{lastVisitAt?: string}|null|undefined} patient
+ * @param {number} [now]
+ * @returns {'overdue'|'due-soon'|'ok'|'none'}
+ */
+export function followupStatus(patient, now = Date.now()) {
+  const d = daysSince(patient?.lastVisitAt, now);
+  if (d == null) return 'none';
+  if (d >= OVERDUE_DAYS) return 'overdue';
+  if (d >= OVERDUE_DAYS - DUE_SOON_DAYS) return 'due-soon';
+  return 'ok';
+}
+
+/** 状态严重度（排序用：超期 > 临期 > 正常 > 未就诊） */
+export const STATUS_RANK = { overdue: 3, 'due-soon': 2, ok: 1, none: 0 };
+
+/** 状态中文名（看板与界面共用，避免各写一份措辞） */
+export const STATUS_CN = { overdue: '超期', 'due-soon': '临期', ok: '正常', none: '未就诊' };
 
 /**
  * 患者匹配：病历号精确 > 姓名 + 出生年/性别收窄；多命中返回 ambiguous（**不静默合并**）。
@@ -559,26 +590,34 @@ export function createPack(ctx) {
     if (error) return error;
 
     if (!target) {
+      // 状态判定统一走 followupStatus —— 与问诊台提醒条**同一处口径**（见该函数说明）
+      const now = Date.now();
       const rows = Object.values(reg.patients).map((p) => {
         const n = listSnapshots(p.id).length;
-        const d = daysSince(p.lastVisitAt);
-        return { p, n, d, overdue: d != null && d >= OVERDUE_DAYS };
-      }).sort((a, b) => (Number(b.overdue) - Number(a.overdue)) || ((b.d ?? 0) - (a.d ?? 0)));
-      const overdue = rows.filter((r) => r.overdue);
+        return { p, n, d: daysSince(p.lastVisitAt, now), status: followupStatus(p, now) };
+      }).sort((a, b) => (STATUS_RANK[b.status] - STATUS_RANK[a.status]) || ((b.d ?? 0) - (a.d ?? 0)));
+      const overdue = rows.filter((r) => r.status === 'overdue');
+      const dueSoon = rows.filter((r) => r.status === 'due-soon');
+      const cell = (s) => (s === 'overdue' ? '⚠ 超期' : s === 'due-soon' ? '⏳ 临期' : s === 'none' ? '—' : '正常');
       const L = [];
-      L.push(`## 回访看板（超期阈值 ${OVERDUE_DAYS} 天）`);
-      L.push(`共 **${rows.length}** 位患者，其中 **${overdue.length}** 位超期未复诊。`);
+      L.push(`## 回访看板（超期阈值 ${OVERDUE_DAYS} 天，临期提前 ${DUE_SOON_DAYS} 天）`);
+      L.push(`共 **${rows.length}** 位患者，其中 **${overdue.length}** 位超期未复诊${dueSoon.length ? `、**${dueSoon.length}** 位临期` : ''}。`);
       if (overdue.length) {
         L.push('');
         L.push('### ⚠ 超期未复诊');
         for (const r of overdue) L.push(`- ${r.p.name}${r.p.birth ? `（${r.p.birth}年生）` : ''}｜病历号 ${r.p.id}｜末次就诊 ${String(r.p.lastVisitAt || '—').slice(0, 10)}｜已 ${r.d} 天未复诊`);
       }
+      if (dueSoon.length) {
+        L.push('');
+        L.push('### ⏳ 临近复诊期');
+        for (const r of dueSoon) L.push(`- ${r.p.name}${r.p.birth ? `（${r.p.birth}年生）` : ''}｜病历号 ${r.p.id}｜末次就诊 ${String(r.p.lastVisitAt || '—').slice(0, 10)}｜已 ${r.d} 天（阈值 ${OVERDUE_DAYS} 天）`);
+      }
       L.push('');
       L.push('### 全部患者');
       L.push('| 病历号 | 患者 | 就诊次数 | 末次就诊 | 距今天数 | 状态 |');
       L.push('|---|---|---|---|---|---|');
-      for (const r of rows) L.push(`| ${r.p.id} | ${r.p.name}${r.p.birth ? `（${r.p.birth}）` : ''} | ${r.n} | ${String(r.p.lastVisitAt || '—').slice(0, 10)} | ${r.d ?? '—'} | ${r.overdue ? '⚠ 超期' : '正常'} |`);
-      return { ok: true, output: L.join('\n'), data: { total: rows.length, overdue: overdue.length } };
+      for (const r of rows) L.push(`| ${r.p.id} | ${r.p.name}${r.p.birth ? `（${r.p.birth}）` : ''} | ${r.n} | ${String(r.p.lastVisitAt || '—').slice(0, 10)} | ${r.d ?? '—'} | ${cell(r.status)} |`);
+      return { ok: true, output: L.join('\n'), data: { total: rows.length, overdue: overdue.length, dueSoon: dueSoon.length } };
     }
 
     let pt = reg.patients[target];
@@ -600,8 +639,10 @@ export function createPack(ctx) {
       return { 第几次就诊: i + 1, 日期: String(d.collectedAt || '').slice(0, 10), ...pickFieldsCn(d) };
     });
     const ds = daysSince(pt.lastVisitAt);
+    const st = followupStatus(pt);
     let out = `## 患者随访｜${pt.name}${pt.birth ? `（${pt.birth}年生）` : ''}｜病历号 ${pt.id}\n共 ${history.length} 次就诊，末次就诊 ${String(pt.lastVisitAt || '—').slice(0, 10)}${ds != null ? `（已 ${ds} 天）` : ''}。\n`;
-    if (ds != null && ds >= OVERDUE_DAYS) out += `\n⚠ **超期未复诊预警**：距上次就诊已 ${ds} 天。\n`;
+    if (st === 'overdue') out += `\n⚠ **超期未复诊预警**：距上次就诊已 ${ds} 天（阈值 ${OVERDUE_DAYS} 天）。\n`;
+    else if (st === 'due-soon') out += `\n⏳ **临近复诊期**：距上次就诊已 ${ds} 天（阈值 ${OVERDUE_DAYS} 天）——建议尽快联系安排复诊。\n`;
 
     const r = await llmJson(toolCtx, {
       system: '你是中医随访助手。只输出一个 JSON。只陈述事实，绝不出现"有效""好转""治愈"等疗效结论。',

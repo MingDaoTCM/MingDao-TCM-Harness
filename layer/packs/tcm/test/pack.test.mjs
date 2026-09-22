@@ -27,7 +27,7 @@ async function testAsync(name, fn) {
 
 // ── 载入被测 Pack（用临时 home，绝不碰真实患者数据） ──
 const TMP_HOME = path.join(process.env.TMPDIR || '/tmp', `tcm-pack-test-${process.pid}`);
-const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock } =
+const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock, followupStatus, OVERDUE_DAYS, DUE_SOON_DAYS, STATUS_RANK, STATUS_CN } =
   await import(path.join(PACK_DIR, 'pack.mjs'));
 
 const pack = createPack({ home: TMP_HOME, packDir: PACK_DIR, packName: 'tcm', log: () => {} });
@@ -69,6 +69,32 @@ test('visitLabel：初诊/二诊/十一诊', () => {
 test('daysSince：无效输入返回 null 而不抛错', () => {
   assert.equal(daysSince(''), null);
   assert.equal(daysSince('not-a-date'), null);
+});
+
+// ── 随访状态（「谁该随访」的唯一口径；看板与问诊台提醒条都走它）──
+test('followupStatus：超期 / 临期 / 正常 / 未就诊 的边界逐天钉住', () => {
+  const now = Date.now();
+  const at = (daysAgo) => new Date(now - daysAgo * 86400000).toISOString();
+  assert.equal(followupStatus({ lastVisitAt: at(0) }, now), 'ok', '今天刚看过');
+  assert.equal(followupStatus({ lastVisitAt: at(OVERDUE_DAYS - DUE_SOON_DAYS - 1) }, now), 'ok', '差一天不进临期');
+  assert.equal(followupStatus({ lastVisitAt: at(OVERDUE_DAYS - DUE_SOON_DAYS) }, now), 'due-soon', '刚好进临期');
+  assert.equal(followupStatus({ lastVisitAt: at(OVERDUE_DAYS - 1) }, now), 'due-soon', '临期最后一天');
+  assert.equal(followupStatus({ lastVisitAt: at(OVERDUE_DAYS) }, now), 'overdue', '刚好进超期');
+  assert.equal(followupStatus({ lastVisitAt: at(60) }, now), 'overdue');
+  assert.equal(followupStatus({ lastVisitAt: '' }, now), 'none', '从未就诊');
+  assert.equal(followupStatus({}, now), 'none');
+  assert.equal(followupStatus(null, now), 'none');
+});
+test('followupStatus 与阈值常量同源（不允许第二处再写一遍天数比较）', () => {
+  assert.equal(OVERDUE_DAYS, 14);
+  assert.equal(DUE_SOON_DAYS, 3);
+  assert.ok(STATUS_RANK.overdue > STATUS_RANK['due-soon'] && STATUS_RANK['due-soon'] > STATUS_RANK.ok);
+  assert.equal(STATUS_CN.overdue, '超期');
+  assert.equal(STATUS_CN['due-soon'], '临期');
+  // 看板与提醒条必须给出同一个答案：同一个患者，两处判定一致
+  const now = Date.now();
+  const p = { lastVisitAt: new Date(now - (OVERDUE_DAYS - 1) * 86400000).toISOString() };
+  assert.equal(followupStatus(p, now), 'due-soon');
 });
 
 // ── 字段契约（★ 复诊失真的回归防线）────────────────────────────────

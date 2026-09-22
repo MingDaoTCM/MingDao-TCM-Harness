@@ -11,7 +11,8 @@
 //       按文件名时间戳排序、只认 case-<epoch>.json）→ loadRegistryFrom / listSnapshotFiles。
 import path from 'node:path';
 import {
-  ALL_FIELDS, FIELD_CN, OVERDUE_DAYS, daysSince, visitLabel, REQUIRED_FIELDS,
+  ALL_FIELDS, FIELD_CN, OVERDUE_DAYS, DUE_SOON_DAYS, daysSince, visitLabel, REQUIRED_FIELDS,
+  followupStatus, STATUS_RANK, STATUS_CN,
   loadRegistryFrom, listSnapshotFiles, readSnapshotFile,
 } from '../../layer/packs/tcm/pack.mjs';
 
@@ -23,7 +24,10 @@ const PID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 
 /** 造一行患者摘要（名册与详情共用） */
 function patientRow(id, p, visits) {
-  const d = daysSince(p.lastVisitAt);
+  const now = Date.now();
+  const d = daysSince(p.lastVisitAt, now);
+  // 随访状态走 Pack 的 followupStatus —— 「谁该随访」的口径只此一处（看板用的也是它）
+  const status = followupStatus(p, now);
   return {
     id,
     name: String(p.name || ''),
@@ -32,7 +36,9 @@ function patientRow(id, p, visits) {
     visits,
     lastVisitAt: String(p.lastVisitAt || ''),
     daysSince: d,
-    overdue: d != null && d >= OVERDUE_DAYS,
+    status,
+    statusCn: STATUS_CN[status],
+    overdue: status === 'overdue',
   };
 }
 
@@ -65,7 +71,7 @@ export function roster(home) {
   const patients = Object.entries(reg.patients)
     .map(([id, p]) => patientRow(id, p, listSnapshotFiles(home, id).length));
   patients.sort((a, b) =>
-    (Number(b.overdue) - Number(a.overdue))
+    (STATUS_RANK[b.status] - STATUS_RANK[a.status])
     || ((b.daysSince ?? -1) - (a.daysSince ?? -1))
     || a.id.localeCompare(b.id));
   return {
@@ -73,10 +79,35 @@ export function roster(home) {
     patients,
     totals: {
       patients: patients.length,
-      overdue: patients.filter((x) => x.overdue).length,
+      overdue: patients.filter((x) => x.status === 'overdue').length,
+      dueSoon: patients.filter((x) => x.status === 'due-soon').length,
       visits: patients.reduce((s, x) => s + x.visits, 0),
     },
     overdueDays: OVERDUE_DAYS,
+    dueSoonDays: DUE_SOON_DAYS,
+  };
+}
+
+/**
+ * 随访提醒集 —— 给「主动提醒」用（问诊台轮询它，不必医师主动去查）。
+ *
+ * 只回**现在就该处理**的两类：`overdue`（已超期）与 `dueSoon`（临期）。
+ * 口径与名册/看板完全一致（同一个 `followupStatus`）—— 不会出现"看板说 3 位、提醒条说 2 位"。
+ * @param {string} home MINGDAO_HOME
+ */
+export function reminders(home) {
+  const r = roster(home);
+  if (!r.ok) return { ok: false, error: r.error };
+  const overdue = r.patients.filter((p) => p.status === 'overdue');
+  const dueSoon = r.patients.filter((p) => p.status === 'due-soon');
+  return {
+    ok: true,
+    overdue,
+    dueSoon,
+    counts: { overdue: overdue.length, dueSoon: dueSoon.length, total: r.patients.length },
+    overdueDays: OVERDUE_DAYS,
+    dueSoonDays: DUE_SOON_DAYS,
+    generatedAt: new Date().toISOString(),
   };
 }
 

@@ -18,6 +18,15 @@
   <span class="st" id="st">未连接</span>
 </header>
 
+<!-- 随访提醒条：有超期/临期患者时出现（轮询刷新；见 js/reminders.js） -->
+<div class="remindbar" id="remindBar" hidden>
+  <span class="rb-ico">🔔</span>
+  <span class="rb-text" id="remindText"></span>
+  <span class="sp"></span>
+  <button class="ghost sm" id="remindGo">查看 →</button>
+  <button class="ghost sm" id="remindNotify">开启桌面提醒</button>
+</div>
+
 <main>
   <!-- ══════════════════════ 问诊 ══════════════════════ -->
   <div class="view" id="view-consult">
@@ -92,6 +101,11 @@
       <div class="rhead">
         <h3>患者名册</h3>
         <div class="sum" id="rosterSum">加载中…</div>
+        <div class="chips" id="statusFilter">
+          <button class="chip active" data-filter="all">全部</button>
+          <button class="chip" data-filter="overdue">超期</button>
+          <button class="chip" data-filter="due-soon">临期</button>
+        </div>
         <div class="row"><button id="rosterRefresh" style="flex:1">刷新</button></div>
       </div>
       <div class="plist" id="rosterList"></div>

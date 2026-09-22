@@ -19,7 +19,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { roster, patientDetail } from './tcm-data.mjs';
+import { roster, patientDetail, reminders } from './tcm-data.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(HERE, 'public');
@@ -97,6 +97,12 @@ function handleTcm(/** @type {any} */ req, /** @type {any} */ res) {
     if (u.pathname === '/api/tcm/patients') {
       const r = roster(HOME);
       json(res, r.ok ? 200 : 500, { ...r, home: HOME });
+      return;
+    }
+    // 随访提醒：问诊台轮询它（提醒口径与名册/看板同源，见 tcm-data.mjs）
+    if (u.pathname === '/api/tcm/reminders') {
+      const r = reminders(HOME);
+      json(res, r.ok ? 200 : 500, r);
       return;
     }
     const m = /^\/api\/tcm\/patients\/(.+)$/.exec(u.pathname);

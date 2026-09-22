@@ -137,6 +137,31 @@ node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830 --home ~
 > 这里给的是**确定性的事实**（哪个字段从什么变成什么），**不含任何疗效判断** ——
 > 「四态对比」（消失/减轻/无变化/加重）是模型判定的产物，仍走 `visit_compare` 工具。
 
+### 随访主动提醒（2026-09-16 新增）
+
+医师不用「想起来才去查」—— 页面会自己把该催的人顶出来：
+
+- **提醒条**：有超期 / 临期患者时出现在顶部，写清「N 位超期 · M 位临期」与阈值口径；
+  「查看 →」直接跳到患者页并按**最严重的那一类**筛选；
+- **名册筛选**：全部 / 超期 / 临期（带计数），与提醒条同一口径；
+- **桌面通知**（可选）：点「开启桌面提醒」授权后，**新出现**超期患者时弹一次系统通知。
+
+口径在 Pack（`followupStatus`）：**超期** = 距末次就诊 ≥ `OVERDUE_DAYS`(14) 天；
+**临期** = 距超期不足 `DUE_SOON_DAYS`(3) 天。**回访看板与提醒条走同一个函数**，
+不会出现「看板说 3 位、提醒条说 2 位」。
+
+两个刻意的取舍：
+
+1. **用轮询（60s）而不是 SSE**：提醒的变化频率是**「天」级**（某位患者跨过 14 天阈值），
+   不是秒级。为一天变一次的数据维持长连接，换来的是复杂度而不是新鲜度。
+2. **只在「新增」时通知**：首次拉取只建立**基线**（不弹），之后只对**新出现**的超期患者通知 ——
+   否则每次轮询都会重复轰炸同一位患者。
+
+> 没有把提醒做成**内核定时任务**：内核 `schedule` 跑的是 **agent 问题**，结果落在会话里、
+> 要医师自己去翻，而且每次运行都烧 token。真想要「每天早上一份随访简报」可以
+> `mingdao schedule add "列出超期未复诊患者并给出随访建议" --every 1d` ——
+> 那是一条**互补**的路（模型生成、进会话），不是本提醒条的替代。
+
 ### 数据从哪来（为什么代理要自己读）
 
 内核是**通用**的，不认识「患者」这种领域概念 —— 患者名册与历史是 Line B 的领域数据
@@ -165,7 +190,7 @@ node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830 --home ~
 ## 测试
 
 ```bash
-node tools/tcm-ui/test/tcm-data.test.mjs    # 数据层：名册排序 / 时间线方向 / 逐项变化 / fail-loud（11 项）
+node tools/tcm-ui/test/tcm-data.test.mjs    # 数据层：名册排序 / 时间线方向 / 逐项变化 / 提醒集 / fail-loud（14 项）
 node tools/tcm-ui/test/ui-wiring.test.mjs   # 接线：静态资源 / DOM id / 模块导出 / 前端零字段知识（7 项）
 ```
 
@@ -186,7 +211,8 @@ node tools/tcm-ui/test/ui-wiring.test.mjs   # 接线：静态资源 / DOM id / �
 | `public/js/util.js` | `$` / HTML 转义 / Markdown 轻渲染（镜像内核 `src/web/util.js`，另支持表格）/ `<think>` 兜底过滤 |
 | `public/js/api.js` | HTTP 薄封装：`getJSON` / `postJSON` / `streamSSE` |
 | `public/js/consult.js` | 问诊视图：表单合成 + 对话（工具卡片 / 正文 / 思考过程）+ `?demo=1` 离线预览 |
-| `public/js/patients.js` | 患者视图：名册 + 时间线 + 逐项变化（**零字段知识**） |
+| `public/js/patients.js` | 患者视图：名册（可按超期/临期筛选）+ 时间线 + 逐项变化（**零字段知识**） |
+| `public/js/reminders.js` | 随访主动提醒：轮询提醒集、渲染提醒条、新超期时发桌面通知 |
 | `public/js/app.js` | 启动、视图切换、内核连接状态 |
 | `test/tcm-data.test.mjs` | 数据层单测 |
 | `test/ui-wiring.test.mjs` | 前端接线测试 |
