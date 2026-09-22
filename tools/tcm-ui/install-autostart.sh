@@ -92,9 +92,14 @@ Restart=no
 WantedBy=default.target
 EOF
     systemctl --user daemon-reload
-    systemctl --user enable --now "$UNIT_NAME" || die "启用失败，看：systemctl --user status $UNIT_NAME"
+    systemctl --user enable "$UNIT_NAME" >/dev/null 2>&1 || true
+    # 注意：`enable --now` 对**已经 active** 的 oneshot（RemainAfterExit=yes）是**空操作** ——
+    # 它照样打印「已启动」，但 ExecStart 根本没再跑。改了代码/目录名之后再装一次自启最容易踩
+    # （2026-09-22 改仓库目录名时实测：install 说"现在已启动"，实际两个进程都没起）。
+    # 所以显式 restart，保证装进去的这份真的生效。
+    systemctl --user restart "$UNIT_NAME" || die "启用失败，看：systemctl --user status $UNIT_NAME"
     say "✓ 已装成 systemd 用户服务：$UNIT_PATH"
-    say "  开机/登录后自动启动；现在已启动。"
+    say "  开机/登录后自动启动；现在已（重新）启动。"
     echo
     say "常用命令："
     say "  systemctl --user status  $UNIT_NAME"
