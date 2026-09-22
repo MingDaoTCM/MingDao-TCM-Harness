@@ -25,7 +25,7 @@ layer/packs/tcm/
   pack.json              # manifest：apiVersion / engines / permissions / contributes
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
-  test/pack.test.mjs        # 45 项：契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
+  test/pack.test.mjs        # 50 项：契约 / 字段契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
   test/integration.test.mjs # 11 项：真实 agent 循环 + 提示词注入 + 入账 + 输出红线
   README.md                 # 本文件
 ```
@@ -109,23 +109,21 @@ layer/packs/tcm/
 测试里有一条专门守这个边界：`红线三 · 既往确诊事实不被误伤`。**若你希望连"确诊为"一起拦，改
 `pack.mjs` 的 pattern 即可**，但要接受上面的代价。
 
-## 四、⚠ 待决策：谁驱动问诊（这是骨架期最关键的未决项）
+## 四、谁驱动问诊（**已定：路线 A**，2026-09-14 决定，并已接线）
 
-### 事实
+### 接线前的约束（现已解除）
 
-Pack 工具要被调用，**前提是 agent 的模型能产出 `tool_calls`**。
-`src/agent.js` 拿到 `res.toolCalls` 才会进入工具执行分支。
+Pack 工具要被调用，**前提是 agent 的模型能产出 `tool_calls`**
+（`src/agent.js` 拿到 `res.toolCalls` 才会进入工具执行分支）。
 
-而 `layer/providers/dify.mjs` 的 `chat()` **恒返回 `toolCalls: null`** ——
-Dify Chatflow 的 `chat-messages` 接口只返回文本，不支持 OpenAI 风格的工具调用。
+而 `layer/providers/dify.mjs` 原先是纯 Dify 流式，`chat()` **恒返回 `toolCalls: null`**
+（Dify 的 `chat-messages` 只返回文本，不支持 OpenAI 风格的工具调用）——
+于是骨架期这 5 个工具处于「已注册但永远不会被触发」的状态。
 
-**结论：只要 `provider` 还是 `dify`，本 Pack 的 4 个工具就是「已注册但永远不会被触发」的状态。**
-（`pack verify` 通过、WebUI 里工具列表可见，但没有任何一次真实调用。）
+**现状（路线 A 已接线）**：`dify.mjs` 每轮先问一次小模型「这一轮要不要调工具」，
+要调就返回 `toolCalls` 交回内核 → §三 的 5 个工具**现在可被真实触发**（见 §4.0）。
 
-**这是骨架期的刻意状态**：先把域能力搬进扩展点、把红线做成可测试的内核约束，
-再由架构决策决定怎么接线。当前 `dify.mjs` **一行未动**，3821 实例行为不变。
-
-### 两条能真正跑通的路线
+### 两条路线（当时的取舍；A 已选）
 
 | | A. Dify 继续主问诊 | B. DeepSeek 主问诊，Dify 降为一个知识工具 |
 |---|---|---|
@@ -298,7 +296,7 @@ Provider 再从中取回、拼进 Dify 的 query（否则会重演「四诊标�
 # ① 静态校验（下游 CI 门禁，应退出 0）
 mingdao pack verify layer/packs/tcm
 
-# ② 单元 + 红线 + 功能 + 错误路径测试（45 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
+# ② 单元 + 红线 + 功能 + 错误路径测试（50 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
 # ③ 端到端集成测试（11 项；真实 agent 循环 + 提示词注入 + 输出红线）
@@ -333,8 +331,8 @@ mingdao pack info tcm
    实测过：42 → 41 通过 / 1 失败。改不红，就说明这条断言是摆设。
 
 > 端到端测试用的是**桩 provider**，所以它证明的是「**工具→入账**这条链在内核里是通的」，
-> **不**证明生产环境的 provider 会产出 `tool_calls`——那正是 §四 待决策的事。
-> 它的价值在于：无论最后选 A 还是 B，这条链都已经验过，不需要边接线边怀疑内核。
+> **不**证明生产环境的 Dify 一定产出 `tool_calls`（那取决于编排模型与 Dify 的返回）。
+> 它的价值在于：无论走哪条路线，这条链都已经验过，不需要边接线边怀疑内核。
 
 ### 测试抓出的三个真 bug（已修）
 
@@ -388,12 +386,21 @@ mingdao pack info tcm
 - 半份病历**刻意不落盘**：它会被下一次复诊当成基线，比没有更危险；
 - 注册表损坏时**大声失败**，绝不降级成"空注册表"——发错病历号不可逆，拒绝服务可恢复；
 - `allocId` 有一层独立兜底：跳过盘上已有 `intake/<id>/` 的号，不依赖注册表自身完好；
-- `zhenduan` 字段对重大疾病诊断有硬规则（原样保留、绝不概括）；
+- 「重大疾病诊断原样保留、绝不概括」这条硬规则现由 `xianbingshi`（现病史）承担
+  （原 `zhenduan` 字段已在 2026-09-15 病历结构重构中并入，语义不变）；
 - 本 Pack 不做任何诊疗判断，**判断权始终归属执业医师**。
 
-### 一个仍存在的结构性风险（接线时必须一并处理）
+### 结构风险已消除：每一类契约都只有一个定义处
 
-`layer/providers/dify.mjs` 里**仍有一份**患者注册表/快照的读写逻辑。
-当前两套并存是安全的——因为 Pack 工具还没被触发（见 §四）——但**一旦接线，两条写入路径会同时存在**：
-两个实现各写一份 `patients.json`，互相覆盖。
-所以接线时必须二选一：把 `dify.mjs` 的域逻辑删掉（推荐，本来就该删），或让它只读不写。
+**① 患者数据只有一个写入者。** `layer/providers/dify.mjs` 里那份患者注册表/快照读写逻辑
+**已随路线 A 接线删除** —— 该文件现在只做两件事（工具编排判定 + Dify 流式问诊），
+**不写 `patients.json` / `intake/**` 的任何字节**。唯一写入者是本 Pack。
+
+**② 字段语义只有一个定义处。** `pack.mjs` 的 `FIELD_CN` + `ALL_FIELDS`；
+provider 只把 `renderVisitBlock()` 的成品原样转发，**零字段知识**。
+
+> ② 是 2026-09-16 补上的，起因是一次**静默失真**：provider 此前自己维护一份**旧十问**字段表，
+> 病历结构重构后没跟上 → 复诊注入的「上次病历」除主诉外全部渲染成「未提及」，
+> 现病史与四诊（舌象/脉象）整段丢失，**不报错、不崩溃、测试还是绿的**（夹具也用旧字段）。
+> 教训写在这里当规矩：**同一份契约定义在两处，迟早会漂移**——
+> 宁可让 provider「什么字段都不认识」，也不给它一份副本。
