@@ -59,15 +59,52 @@ npm run dist:mac       # dmg
 > 校验这套布局的断言在 [`../test/desktop-orchestrator.test.mjs`](../test/desktop-orchestrator.test.mjs)
 > 的 `[3]` 段：打包配置必须同时带 `to: app` 与 `to: kernel`。
 
+## 用 GitHub Actions 出包（推荐，与上游同一条路）
+
+**打 tag 即出三平台安装包 + 自动建 GitHub Release**：
+
+```bash
+git tag -a v0.1.0 -m "明道中医 · 问诊台 桌面版 v0.1.0" && git push github v0.1.0
+```
+
+- `Desktop` 工作流（[`.github/workflows/desktop.yml`](../../../.github/workflows/desktop.yml)）跑 4 条腿：
+  `linux-x64`（AppImage+deb）、`win-x64`（NSIS）、`mac-x64`、`mac-arm64`；
+- **只上传工件、不发版**的干跑：Actions → Desktop → Run workflow（`workflow_dispatch`）；
+- 发版只认 tag（`publish` 作业有 `if: startsWith(github.ref, 'refs/tags/')`），干跑绝不会误建 Release。
+
+### macOS 签名 / 公证（需要你在仓库里配 Secrets）
+
+上游用的是这 5 个（**本仓库目前一个都没配，所以现在的产物是未签名的**）：
+
+| Secret | 用途 |
+|---|---|
+| `CSC_LINK` | Developer ID Application 证书（.p12 的 base64） |
+| `CSC_KEY_PASSWORD` | 上面那张证书的密码 |
+| `APPLE_ID` | Apple 开发者账号 |
+| `APPLE_APP_SPECIFIC_PASSWORD` | 该账号的 app-specific 密码 |
+| `APPLE_TEAM_ID` | 团队 ID（已在 `electron-builder.yml` 的 `notarize.teamId` 里写死同一个） |
+
+从上游 `MingDao-Harness` 的 Settings → Secrets and variables → Actions 里逐个复制到本仓库即可
+（**GitHub 不导出密钥值，只能人工搬**）。配好后**重跑一次**（Actions 里 Re-run，或打个新 tag），
+签名与公证会自动生效 —— 未配置时 `electron-builder` 自动回退未签名产物，不会失败。
+
+> Windows 若要 Authenticode 签名，上游走 Azure Trusted Signing（`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/
+> `AZURE_CLIENT_SECRET`），`electron-builder.yml` 里那段已注释好，按注释取消注释即可。
+
 ## 诚实边界（重要）
 
-本目录的 **Electron 层没有在本开发机验证过** —— 这台机器没有 X server，Electron 连平台初始化
-都过不去。已经验证的是：
+**Electron 的窗口部分没有在开发机验证过** —— 这台机器没有 X server，Electron 连平台初始化都过不去。
+但**打包产物本身已在 CI 里被真正启动过**（`ubuntu-latest` + `xvfb-run`，见工作流的「打包冒烟」一步）：
+日志里能看到内核起服务、以及 `MINGDAO_TCM_DESKTOP_SMOKE_OK`。
 
-- **编排层端到端**（`test/desktop-orchestrator.test.mjs`）：真起内核 + 真起代理、
-  `/api/tcm/*` 与经代理转发到内核的 `/api/state` 都通、`close()` 能干净关掉、不留进程；
-- **壳的静态完整性**：文件齐全、`package.json` 合法（`main`/`type`/依赖）、
-  `main.js` 引用的 orchestrator 导出都存在、`main.js` 不自己起服务、打包配置带上了内核与前端。
+已验证的：
 
-**没验证的**：窗口渲染、托盘、外链处理、以及三个平台的安装包本身。
-请在有桌面的机器上跑一次 `npm start`（或 `MINGDAO_TCM_DESKTOP_SMOKE=1 npm start`）确认。
+- **编排层端到端**（[`../test/desktop-orchestrator.test.mjs`](../test/desktop-orchestrator.test.mjs)）：
+  真起内核 + 真起代理、`/api/tcm/*` 与经代理转发的 `/api/state` 都通、`close()` 干净关掉不留进程；
+- **壳的静态完整性**：文件齐全、`package.json` 合法、`main.js` 引用的 orchestrator 导出都存在、
+  `main.js` 不自己起服务、打包配置确实带上了内核与前端；
+- **打包产物能启动**（CI，xvfb）：Electron 主进程真的跑起来了，内置内核与问诊台都起来了；
+- **打包布局正确**：CI 产出的 `.deb` 里能查到 `opt/<产品名>/resources/{kernel/src, app/tools/tcm-ui, app/layer/packs/tcm}`。
+
+**仍未验证的**：窗口渲染、托盘、外链处理（冒烟在开窗口之前就退出了，CI 里也没有真显示器）。
+请在有桌面的机器上 `npm start` 或装上安装包双击一次确认。
