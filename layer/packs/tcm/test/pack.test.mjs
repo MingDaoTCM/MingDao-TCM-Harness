@@ -27,7 +27,7 @@ async function testAsync(name, fn) {
 
 // ── 载入被测 Pack（用临时 home，绝不碰真实患者数据） ──
 const TMP_HOME = path.join(process.env.TMPDIR || '/tmp', `tcm-pack-test-${process.pid}`);
-const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS } =
+const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock } =
   await import(path.join(PACK_DIR, 'pack.mjs'));
 
 const pack = createPack({ home: TMP_HOME, packDir: PACK_DIR, packName: 'tcm', log: () => {} });
@@ -69,6 +69,40 @@ test('visitLabel：初诊/二诊/十一诊', () => {
 test('daysSince：无效输入返回 null 而不抛错', () => {
   assert.equal(daysSince(''), null);
   assert.equal(daysSince('not-a-date'), null);
+});
+
+// ── 字段契约（★ 复诊失真的回归防线）────────────────────────────────
+// 背景（实测复现）：复诊注入给 Dify 的「上次病历」块，此前由 **provider** 按自己的一份
+// **旧十问**字段表渲染。病历结构 2026-09-15 重构后 provider 那份没跟上 → 除主诉外全部
+// 渲染成「未提及」、现病史与四诊整段丢失，且不报错、测试还是绿的（夹具同样用旧字段）。
+// 修法不是"把标签改对"，而是**把渲染权收回 Pack**，并让下面这两条断言守住契约：
+// 字段语义只定义在 pack.mjs 一处（FIELD_CN + ALL_FIELDS），provider 只转发 renderVisitBlock 的成品。
+test('★ 字段契约：中文标签与 ALL_FIELDS 一一对应（增删字段必须同步）', () => {
+  assert.deepEqual(Object.keys(FIELD_CN).sort(), [...ALL_FIELDS].sort(),
+    'FIELD_CN 必须与 ALL_FIELDS 完全一致 —— 少一个标签就会让该字段在「上次病历」里静默消失');
+});
+
+test('★ 渲染块覆盖全部字段，且不含旧十问字段名（复诊失真回归）', () => {
+  const snap = Object.fromEntries(ALL_FIELDS.map((k) => [k, `${k}-值`]));
+  const block = renderVisitBlock(snap);
+  for (const k of ALL_FIELDS) {
+    assert.ok(block.includes(`${FIELD_CN[k]}：${k}-值`), `块里应有「${FIELD_CN[k]}」及其值`);
+  }
+  for (const old of ['寒热', '汗', '头身', '二便', '饮食', '胸腹', '口渴', '旧病', '诊断/重大疾病']) {
+    assert.ok(!block.includes(old), `「上次病历」块里不该再出现旧字段「${old}」`);
+  }
+});
+
+test('渲染块：缺失值一律「未提及」，绝不编造、不泄 undefined', () => {
+  const block = renderVisitBlock({ zhushu: '失眠' });
+  assert.match(block, /主诉：失眠/);
+  assert.match(block, /现病史：未提及/);
+  assert.ok(!/undefined|null/.test(block), '不得把 undefined/null 渲染进去：' + JSON.stringify(block));
+});
+
+test('渲染块：空/未定义快照不抛错（调用方按「无上次病历」处理）', () => {
+  assert.equal(typeof renderVisitBlock(null), 'string');
+  assert.equal(typeof renderVisitBlock(undefined), 'string');
 });
 
 console.log('\n[2] 工具契约');
@@ -261,6 +295,17 @@ await testAsync('patient_lookup：已有患者 → found，且给出本次为第
   assert.equal(r.data.status, 'found');
   assert.equal(r.data.visitNo, 2);
   assert.equal(r.data.visitLabel, '二诊');
+});
+
+await testAsync('★ patient_lookup：交出渲染好的 lastVisitText（现病史+四诊必须在内，provider 直接转发）', async () => {
+  const r = await tool('patient_lookup').run({ name: '张三' }, stub({}));
+  assert.ok(r.data.lastVisitText, '必须交出 lastVisitText —— provider 不再自己认字段');
+  assert.equal(r.data.lastVisitText, renderVisitBlock(r.data.lastSnapshot), '渲染块必须与 lastSnapshot 同源');
+  assert.match(r.data.lastVisitText, /现病史：/, '现病史必须在上次病历块里（此前被静默丢掉）');
+  assert.match(r.data.lastVisitText, /舌象：舌红苔黄/, '四诊·舌象必须保留');
+  assert.match(r.data.lastVisitText, /脉象：脉弦细/, '四诊·脉象必须保留');
+  assert.match(r.data.lastVisitText, /过敏史：青霉素过敏/, '过敏史必须保留');
+  assert.ok(!/寒热|头身|口渴|旧病/.test(r.data.lastVisitText), '不得再出现旧十问字段名');
 });
 
 await testAsync('visit_compare：只有一次就诊 → 明确说明无法对比', async () => {

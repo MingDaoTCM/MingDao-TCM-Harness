@@ -53,13 +53,6 @@ const PACK_TOOL_PREFIX = 'pack__';
  */
 export const supportsVision = true;
 
-const FIELD_LABELS = {
-  zhushu: '主诉（含疾病诊断+主要症状）',
-  zhenduan: '诊断/重大疾病（必须原样记录，绝不省略）',
-  hanre: '寒热', han: '汗', toushen: '头身', erbian: '二便',
-  yinshi: '饮食', xiongfu: '胸腹', kouke: '口渴', jiubing: '旧病',
-};
-
 /**
  * 编排器系统提示。
  * 关键点：明确告诉它「不要产出临床内容」——临床正文由 Dify 负责。
@@ -267,6 +260,11 @@ export function createProvider(pc) {
    * 否则它会用 sys.dialogue_count 自己猜 —— 那正是「四诊标题矛盾」的根因。
    * 而这份上下文由 Pack 的 patient_lookup 权威产出（它读的是同一份注册表），
    * 这里只做**只读取回**，不重复实现患者匹配逻辑（避免两份实现给出不同的就诊次数）。
+   *
+   * `lastVisitText` 是 Pack **渲染好的中文块**，本文件原样转发、**不认任何字段**。
+   * 为什么不在 provider 里渲染：同一份字段契约定义两处必然漂移 ——
+   * 2026-09-15 病历结构重构后就是如此，复诊注入的「上次病历」除主诉外全是「未提及」、
+   * 现病史与四诊整段丢失，且不报错。字段语义只在 `packs/tcm/pack.mjs` 一处（FIELD_CN）。
    */
   function visitContext(/** @type {any} */ messages) {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -281,7 +279,11 @@ export function createProvider(pc) {
         const parsed = JSON.parse(s.slice(a, b + 1));
         const d = parsed?.data;
         if (d && Number.isFinite(Number(d.visitNo))) {
-          return { visitNo: Number(d.visitNo), visitLabel: String(d.visitLabel || ''), lastSnapshot: d.lastSnapshot || null };
+          return {
+            visitNo: Number(d.visitNo),
+            visitLabel: String(d.visitLabel || ''),
+            lastVisitText: typeof d.lastVisitText === 'string' ? d.lastVisitText : '',
+          };
         }
       } catch { /* 该条不是我们要找的，继续往前找 */ }
     }
@@ -334,11 +336,9 @@ export function createProvider(pc) {
       if (vc?.visitNo) {
         const n = vc.visitNo;
         const label = vc.visitLabel || (n === 1 ? '初诊' : `第${n}诊`);
-        if (n > 1 && vc.lastSnapshot) {
-          const block = Object.entries(FIELD_LABELS)
-            .map(([k, name]) => `${name}：${String(vc.lastSnapshot[k] || '未提及')}`)
-            .join('\n');
-          difyQuery = `【就诊次数】本次为该患者第 ${n} 次就诊（${label}）；上次为第 ${n - 1} 次就诊，病历如下，请回顾并对比辨证，不要当作新病案、不要自行重算次数。\n${block}\n\n【本次（${label}）】\n${query}`;
+        if (n > 1 && vc.lastVisitText) {
+          // 「上次病历」块由 Pack 渲染好（renderVisitBlock），这里**原样转发**。
+          difyQuery = `【就诊次数】本次为该患者第 ${n} 次就诊（${label}）；上次为第 ${n - 1} 次就诊，病历如下，请回顾并对比辨证，不要当作新病案、不要自行重算次数。\n${vc.lastVisitText}\n\n【本次（${label}）】\n${query}`;
         } else {
           difyQuery = `【就诊次数】本次为该患者第 ${n} 次就诊（${label}）。\n${query}`;
         }

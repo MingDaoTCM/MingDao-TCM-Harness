@@ -52,6 +52,35 @@ export const OPTIONAL_FIELDS = ['jiwangshi', 'jiazushi', 'guominshi', 'liuxingbi
 /** 全部会落盘的字段（必填在前，可选在后） */
 export const ALL_FIELDS = [...REQUIRED_FIELDS, ...OPTIONAL_FIELDS];
 
+/**
+ * 字段中文短名 —— **字段语义的唯一定义处**（问诊台时间线与「上次病历」注入块共用）。
+ *
+ * 为什么要抽出来、并把渲染权收在 Pack 里：
+ * 复诊时注入给 Dify 的「上次病历」块，此前由 **provider**（`providers/dify.mjs`）
+ * 按它自己那份**旧十问**字段表渲染。病历结构 2026-09-15 重构后 provider 那份没跟上，
+ * 于是复诊时除主诉外全部字段渲染成「未提及」，现病史与四诊（舌象/脉象）整段丢失，
+ * **而且不报错、不崩溃、测试还是绿的**（测试夹具同样用了旧字段）。
+ * 根因不是"漏改一行"，是**同一份契约被定义在两处**。所以：
+ *   · 渲染权归 Pack（本文件）→ `renderVisitBlock()`；
+ *   · provider 只把成品转发出去，**零字段知识** → 结构上不再可能漂移。
+ */
+export const FIELD_CN = {
+  zhushu: '主诉', xianbingshi: '现病史', jiwangshi: '既往史', jiazushi: '家族史',
+  guominshi: '过敏史', liuxingbingshi: '流行病史', tigejiancha: '体格检查',
+  shexiang: '舌象', maixiang: '脉象', suifang: '随访',
+};
+
+/**
+ * 把一份病历快照渲染成可注入上下文的「上次病历」中文块。
+ * 键集严格取自 `ALL_FIELDS`、标签取自 `FIELD_CN` —— 新增字段若忘了加标签，
+ * `pack.test.mjs` 的字段契约断言会当场失败（而不是静默丢掉一个字段）。
+ * @param {Record<string, any>|null|undefined} snapshot
+ * @returns {string}
+ */
+export function renderVisitBlock(snapshot) {
+  return ALL_FIELDS.map((k) => `${FIELD_CN[k]}：${String(snapshot?.[k] || '未提及')}`).join('\n');
+}
+
 /** 复诊四态（顺序固定，供提示词与渲染共用） */
 export const FOUR_STATES = ['消失', '减轻', '无变化', '加重'];
 
@@ -302,12 +331,16 @@ export function createPack(ctx) {
       const p = m.patient;
       const snaps = listSnapshots(p.id);
       const visits = snaps.length;
-      // lastSnapshot：把「上一次病历」一并交出去。
+      // lastSnapshot / lastVisitText：把「上一次病历」一并交出去。
       // 为什么放在工具结果里：路线 A 下 Dify 仍负责产出临床正文，而 Dify 看不到我们的会话，
       // 它必须收到「本次第几诊 + 上次病历摘要」才能正确回顾对比（否则会重演「四诊标题矛盾」）。
       // 内核把整个结果（含 data）序列化进消息上下文，provider 因此能取回它 —— 见 dify.mjs 的 visitContext()。
+      //
+      // lastVisitText 是**渲染好的中文块**：provider 直接转发、不认字段（见 FIELD_CN 的说明）。
+      // lastSnapshot 一并保留，供调试与将来的消费方使用。
       const last = visits ? readSnapshot(snaps[0]) : null;
       const lastSnapshot = last ? Object.fromEntries(ALL_FIELDS.map((k) => [k, String(last[k] || '')])) : null;
+      const lastVisitText = lastSnapshot ? renderVisitBlock(lastSnapshot) : null;
       return {
         ok: true,
         output: `已定位患者：${p.name}${p.birth ? `（${p.birth}年生）` : ''}｜病历号 ${p.id}｜性别 ${p.sex || '未录'}｜已有 ${visits} 次就诊记录｜末次就诊 ${String(p.lastVisitAt || '—').slice(0, 10)}。本次为第 ${visits + 1} 次就诊（${visitLabel(visits + 1)}）。`,
@@ -315,7 +348,7 @@ export function createPack(ctx) {
           status: 'found',
           patient: { id: p.id, name: p.name, birth: p.birth, sex: p.sex, lastVisitAt: p.lastVisitAt },
           visits, visitNo: visits + 1, visitLabel: visitLabel(visits + 1),
-          lastSnapshot,
+          lastSnapshot, lastVisitText,
         },
       };
     }
@@ -550,11 +583,10 @@ export function createPack(ctx) {
     return { ok: true, output: out, data: { visits: history.length, overdueDays: ds } };
   }
 
-  /** 快照 → 中文字段（随访时间线用） */
+  /** 快照 → 中文字段（随访时间线用；标签统一取自 FIELD_CN，不在此另立一份） */
   function pickFieldsCn(d) {
-    const CN = { zhushu: '主诉', xianbingshi: '现病史', jiwangshi: '既往史', jiazushi: '家族史', guominshi: '过敏史', liuxingbingshi: '流行病史', tigejiancha: '体格检查', shexiang: '舌象', maixiang: '脉象', suifang: '随访' };
     const out = /** @type {Record<string,any>} */ ({});
-    for (const k of ALL_FIELDS) out[CN[k]] = d[k];
+    for (const k of ALL_FIELDS) out[FIELD_CN[k]] = d[k];
     return out;
   }
 

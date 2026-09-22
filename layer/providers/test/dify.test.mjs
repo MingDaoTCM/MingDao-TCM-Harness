@@ -19,6 +19,9 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dify-orch-test-'));
 process.env.MINGDAO_HOME = HOME;
 
 const { createProvider } = await import(path.join(HERE, '..', 'dify.mjs'));
+// 从 Pack 取**真实**的渲染函数：provider 现在只转发 Pack 渲染好的块（零字段知识），
+// 所以「上次病历」这块的契约由 pack.mjs 定义，测试用同一个函数造夹具才不会自说自话。
+const { renderVisitBlock } = await import(path.join(HERE, '..', '..', 'packs', 'tcm', 'pack.mjs'));
 
 let passed = 0;
 let failed = 0;
@@ -84,13 +87,21 @@ function installFetch({ decider = 'continue', dify = DIFY_OK } = {}) {
   return calls;
 }
 
-/** 造一条「Pack 的 patient_lookup 结果」消息，模拟内核把它序列化进上下文 */
+/**
+ * 造一条「Pack 的 patient_lookup 结果」消息，模拟内核把它序列化进上下文。
+ * `lastVisitText` 用 Pack 的真实 `renderVisitBlock` 生成 —— 测的就是那条真实契约。
+ */
 const lookupMessage = (visitNo, lastSnapshot) => ({
   role: 'tool',
   tool_call_id: 'c0',
   content: JSON.stringify({
     ok: true, output: `已定位患者…本次为第 ${visitNo} 次就诊`,
-    data: { status: 'found', patient: { id: 'P001', name: '张三' }, visits: visitNo - 1, visitNo, visitLabel: visitNo === 1 ? '初诊' : '二诊', lastSnapshot },
+    data: {
+      status: 'found', patient: { id: 'P001', name: '张三' }, visits: visitNo - 1, visitNo,
+      visitLabel: visitNo === 1 ? '初诊' : '二诊',
+      lastSnapshot,
+      lastVisitText: lastSnapshot ? renderVisitBlock(lastSnapshot) : null,
+    },
   }),
 });
 const userMessages = (extra = []) => [
@@ -119,7 +130,17 @@ await testAsync('② 判定说「继续」→ 走 Dify，且 query 带「本次�
   clearConfig();
   const calls = installFetch({ decider: 'continue' });
   const p = createProvider({ name: 'dify', baseUrl: 'https://dify.example.com' });
-  const snap = { zhushu: '失眠', zhenduan: '宫颈癌（2024 年确诊，术后）', hanre: '', han: '', toushen: '', erbian: '', yinshi: '', xiongfu: '', kouke: '', jiubing: '' };
+  // ★ 夹具必须是**当前**病历结构的字段（重构后：主诉/现病史 + 可选八项）。
+  // 此前这里用的是旧十问字段 —— 夹具与实现一起错，于是复诊失真测不出来（假绿）。
+  const snap = {
+    zhushu: '失眠多梦三个月',
+    xianbingshi: '三月前无诱因入睡困难，伴多梦易醒；既往 2024 年确诊为宫颈癌，术后规律复查',
+    jiwangshi: '宫颈癌术后；高血压十年',
+    guominshi: '青霉素过敏',
+    shexiang: '舌红苔黄',
+    maixiang: '脉弦细',
+    suifang: '两周后复诊',
+  };
   const r = await p.chat({ messages: userMessages([lookupMessage(2, snap)]), tools: TOOLS });
   const dc = calls.find((c) => c.url.includes('/chat-messages'));
   assert.ok(dc, '应当调用 Dify');
@@ -127,8 +148,36 @@ await testAsync('② 判定说「继续」→ 走 Dify，且 query 带「本次�
   assert.match(dc.body.query, /上次为第 1 次就诊/, '必须回顾上次');
   assert.match(dc.body.query, /宫颈癌/, '重大疾病诊断必须原样带过去');
   assert.match(dc.body.query, /张三，失眠多梦三个月$/, '医师原文必须原样保留在末尾');
+  // ★ 复诊失真回归：上次病历必须带**现病史与四诊**，且不得残留旧十问字段名。
+  // 这几条正是旧实现下会失败、而旧夹具下永远绿的部分。
+  assert.match(dc.body.query, /现病史：/, '现病史必须注入（此前被静默丢掉）');
+  assert.match(dc.body.query, /舌象：舌红苔黄/, '四诊·舌象必须注入');
+  assert.match(dc.body.query, /脉象：脉弦细/, '四诊·脉象必须注入');
+  assert.match(dc.body.query, /过敏史：青霉素过敏/, '过敏史必须注入');
+  assert.ok(!/寒热|头身|口渴|旧病|诊断\/重大疾病/.test(dc.body.query), '不得再出现旧十问字段名：' + dc.body.query);
   assert.equal(r.text, '请问睡眠情况如何？');
   assert.equal(r.toolCalls, null);
+});
+
+await testAsync('②b ★ provider 零字段知识：只转发 Pack 渲染好的 lastVisitText', async () => {
+  writeCreds({ dify: 'app-t', deepseek: 'sk-t' });
+  clearConfig();
+  const calls = installFetch({ decider: 'continue' });
+  const p = createProvider({ name: 'dify', baseUrl: 'https://dify.example.com' });
+  // lastSnapshot 故意用 provider 不认识的键 + lastVisitText 用自定义文本：
+  // 若 provider 还在自己遍历字段，自定义块就不会出现、未知键反而可能被渲染出来。
+  const msg = {
+    role: 'tool',
+    tool_call_id: 'c0',
+    content: JSON.stringify({
+      ok: true, output: '已定位',
+      data: { visitNo: 2, visitLabel: '二诊', lastSnapshot: { someUnknownField: '不应出现' }, lastVisitText: '现病史：自定义块内容\n舌象：自定义舌象' },
+    }),
+  };
+  await p.chat({ messages: userMessages([msg]), tools: TOOLS });
+  const dc = calls.find((c) => c.url.includes('/chat-messages'));
+  assert.match(dc.body.query, /现病史：自定义块内容/, 'provider 必须原样转发 Pack 给的块');
+  assert.ok(!/someUnknownField|不应出现/.test(dc.body.query), 'provider 不得自行遍历 lastSnapshot（零字段知识）');
 });
 
 await testAsync('③ 判定失败（HTTP 500）→ **仍然走 Dify**，不抛错', async () => {
