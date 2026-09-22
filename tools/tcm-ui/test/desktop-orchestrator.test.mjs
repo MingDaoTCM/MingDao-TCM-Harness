@@ -43,7 +43,25 @@ await testAsync('resolveKernelRoot：找到内核（有 src/web/server.js）', (
   assert.ok(fs.existsSync(path.join(root, 'src', 'web', 'server.js')));
 });
 await testAsync('resolveKernelRoot：找不到时返回 null（调用方据此给可操作报错）', () => {
-  assert.equal(resolveKernelRoot({ explicit: '/nonexistent-kernel-xyz', appRoot: '/nonexistent-app' }), null);
+  // ⚠ 必须先清掉 MINGDAO_KERNEL：CI 里门禁命令要用它，所以那个环境变量是**设着**的，
+  // 而这条断言的语义恰恰是「哪儿都找不到」——不清就等于在测另一个场景。
+  // （本机不设该变量，所以它一直在本地是绿的，是 GitHub CI 先把它照出来的。）
+  const saved = process.env.MINGDAO_KERNEL;
+  delete process.env.MINGDAO_KERNEL;
+  try {
+    assert.equal(resolveKernelRoot({ explicit: '/nonexistent-kernel-xyz', appRoot: '/nonexistent-app' }), null);
+  } finally {
+    if (saved !== undefined) process.env.MINGDAO_KERNEL = saved;
+  }
+});
+await testAsync('resolveKernelRoot：显式传入优先于 MINGDAO_KERNEL 环境变量', () => {
+  const saved = process.env.MINGDAO_KERNEL;
+  process.env.MINGDAO_KERNEL = '/definitely-not-a-kernel';
+  try {
+    assert.equal(resolveKernelRoot({ explicit: KERNEL }), KERNEL, '显式给的内核必须赢过环境变量');
+  } finally {
+    if (saved === undefined) delete process.env.MINGDAO_KERNEL; else process.env.MINGDAO_KERNEL = saved;
+  }
 });
 
 console.log('\n[2] 端到端（真起内核 + 真起问诊台）');
