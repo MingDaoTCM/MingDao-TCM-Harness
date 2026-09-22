@@ -376,11 +376,54 @@ export function createProvider(pc) {
       let usage = /** @type {any} */ ({});
       let ended = false;
       let streamError = '';
+      // Dify 工作流把模型的 <think>…</think> 推理**混在同一串 answer 分片里**（实测 1369 字 / 全文 2530 字）。
+      // 处理原则（医师定稿）：思考过程**保留可看**，但必须与问诊正文分流，且不显示标签本身。
+      //   · 正文  → `{ text }`      → 内核 writeText      → SSE text（受输出红线约束）
+      //   · 思考  → `{ reasoning }` → 内核 writeReasoning → SSE reasoning（独立通道，不着红线）
+      // 分流后标签天然不会出现在任何一条流里，前端只需给两条流不同的排版。
+      let emitted = 0;
+      let emittedThink = 0;
+      // 全局处理**所有** <think>…</think> 段：Dify 可能把多个 LLM 节点的输出拼在一起，
+      // 只剥第一段会让第二段连着标签一起留在正文里（实测确认，正好违反「隐藏标签」）。
+      const THINK_RE = /<think>([\s\S]*?)<\/think>/g;
+      const visibleOf = (/** @type {string} */ s) => {
+        let out = '';
+        let last = 0;
+        THINK_RE.lastIndex = 0;
+        let m;
+        while ((m = THINK_RE.exec(s))) { out += s.slice(last, m.index); last = m.index + m[0].length; }
+        out += s.slice(last);
+        const i = out.indexOf('<think>'); // 未闭合的开标签：其后整体归思考通道
+        return i >= 0 ? out.slice(0, i) : out;
+      };
+      const thinkingOf = (/** @type {string} */ s) => {
+        const parts = [];
+        let last = 0;
+        THINK_RE.lastIndex = 0;
+        let m;
+        while ((m = THINK_RE.exec(s))) { parts.push(m[1]); last = m.index + m[0].length; }
+        const i = s.slice(last).indexOf('<think>');
+        if (i >= 0) parts.push(s.slice(last + i + 7));
+        return parts.join('\n');
+      };
+      // 末尾可能是 "<thi" / "</thi" 这类半个标签：先扣住，避免发出后再回撤
+      const holdBack = (/** @type {string} */ v, /** @type {string} */ tag) => {
+        for (let k = Math.min(tag.length - 1, v.length); k > 0; k--) if (tag.startsWith(v.slice(-k))) return v.length - k;
+        return v.length;
+      };
+      const emitStreams = (/** @type {boolean} */ final) => {
+        const v = visibleOf(answer);
+        const n = final ? v.length : holdBack(v, '<think>');
+        if (n > emitted) { opts.onDelta?.({ text: v.slice(emitted, n) }); emitted = n; }
+        const th = thinkingOf(answer);
+        const tn = final ? th.length : holdBack(th, '</think>');
+        if (tn > emittedThink) { opts.onDelta?.({ reasoning: th.slice(emittedThink, tn) }); emittedThink = tn; }
+      };
       const handle = (/** @type {string} */ payload) => {
         let j;
         try { j = JSON.parse(payload); } catch { return; }
         if (j.conversation_id) conversationId = j.conversation_id;
-        if (j.event === 'message') { const c = j.answer || ''; answer += c; opts.onDelta?.({ text: c }); }
+        if (j.event === 'message') { answer += j.answer || ''; emitStreams(false); }
         else if (j.event === 'message_end') { if (j.metadata?.usage) usage = j.metadata.usage; ended = true; }
         else if (j.event === 'error') { streamError = String(j.message || j.error || j.code || 'Dify 工作流错误'); }
       };
@@ -397,14 +440,17 @@ export function createProvider(pc) {
         if (ended) break;
       }
       if (ended) { try { reader.cancel().catch(() => {}); } catch {} }
+      emitStreams(true); // 补发被 holdBack 扣住的尾巴（与最终 text / reasoning 对齐）
       if (!answer && streamError) throw new Error(`[dify] 工作流错误：${streamError}`);
       if (!answer) throw new Error('[dify] 工作流未返回正文（可能被限流或参数异常），请稍后重试');
 
-      // <think> 段拆出来单独展示（与内核的 reasoning 通道对齐）
-      let reasoning = '';
-      let text = answer;
-      const m = /<think>[\s\S]*?<\/think>/.exec(answer);
-      if (m) { reasoning = m[0].slice(7, -8).trim(); text = answer.replace(m[0], '').trim(); }
+      // 思考过程：与上面流式分流的**同一套语义**（thinkingOf），保证「看到的」与「落库的」一致
+      let reasoning = thinkingOf(answer).trim();
+      let text = visibleOf(answer).trim();
+      if (!text) {
+        // 整段都被未闭合的 <think> 吞掉：正文位显式说明，推理照旧留在 reasoning 通道
+        text = '（本次回复未产出可见正文：模型输出未正常闭合，请重试）';
+      }
 
       return {
         text,

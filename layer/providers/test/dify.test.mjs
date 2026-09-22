@@ -236,6 +236,94 @@ await testAsync('⑩ 全是通用工具时，**完全不发起**判定调用（�
   assert.equal(r.text, '请问睡眠情况如何？');
 });
 
+// ── 正文 / 思考过程 双通道分流（实测回归：Dify 把 <think> 混在 answer 分片里）──
+// 现场数据：正文分片累积 2530 字，其中 <think>…</think> 占 1369 字，而收尾 res.text 只有 1163 字。
+// 医师定稿的处理原则：思考过程**保留可看**（对中医辨证有用），但必须
+//   ① 走 reasoning 通道，不混进问诊正文（正文要受输出红线约束）；
+//   ② 标签本身不出现在任何一条流里；
+//   ③ 流式所见 == 收尾所得（否则「看到的」和「落库的」不一致）。
+async function streamOf(payloads) {
+  writeCreds({ dify: 'app-t', deepseek: 'sk-t' });
+  clearConfig();
+  installFetch({ decider: 'continue', dify: () => sse(payloads) });
+  const p = createProvider({ name: 'dify', baseUrl: 'https://dify.example.com' });
+  let text = '', reasoning = '';
+  const r = await p.chat({
+    messages: userMessages(), tools: TOOLS,
+    onDelta: (d) => { text += d.text || ''; reasoning += d.reasoning || ''; },
+  });
+  return { text, reasoning, r };
+}
+
+await testAsync('⑪ ★ 思考过程走 reasoning 通道，正文通道保持干净（标签两边都不出现）', async () => {
+  const { text, reasoning, r } = await streamOf([
+    { event: 'message', answer: '<think>先问失眠', conversation_id: 'c1' },
+    { event: 'message', answer: '多久了，是否多梦</think>请问睡眠情况如何？' },
+    { event: 'message_end', metadata: { usage: { prompt_tokens: 10, completion_tokens: 5 } } },
+  ]);
+  assert.equal(text.trim(), '请问睡眠情况如何？', '正文通道只能有正文');
+  assert.ok(!text.includes('先问失眠'), '推理绝不能混进正文通道：' + JSON.stringify(text));
+  assert.equal(reasoning.trim(), '先问失眠多久了，是否多梦', '思考内容必须完整走 reasoning 通道（医师要看）');
+  assert.ok(!/<\/?think>/.test(text) && !/<\/?think>/.test(reasoning), '标签本身不能被送出：' + JSON.stringify({ text, reasoning }));
+  assert.equal(text.trim(), r.text.trim(), '流式正文必须与收尾 res.text 同源');
+  assert.equal(reasoning.trim(), r.reasoning.trim(), '流式思考必须与收尾 res.reasoning 同源');
+});
+
+await testAsync('⑫ 标签被切在分片中间（"<thi" / "</thi"）也不早发半个标签', async () => {
+  const { text, reasoning, r } = await streamOf([
+    { event: 'message', answer: '<thi' },
+    { event: 'message', answer: 'nk>推理' },
+    { event: 'message', answer: '内容</thi' },
+    { event: 'message', answer: 'nk>正文开始' },
+    { event: 'message_end', metadata: { usage: { prompt_tokens: 1, completion_tokens: 1 } } },
+  ]);
+  assert.ok(!text.includes('<') && !reasoning.includes('<'), '半截标签不能被发出去：' + JSON.stringify({ text, reasoning }));
+  assert.equal(text.trim(), '正文开始');
+  assert.equal(reasoning.trim(), '推理内容');
+  assert.equal(text.trim(), r.text.trim());
+  assert.equal(reasoning.trim(), r.reasoning.trim());
+});
+
+await testAsync('⑬ 未闭合的 <think> → 正文不留推理，但推理内容仍完整可看', async () => {
+  const { text, reasoning, r } = await streamOf([
+    { event: 'message', answer: '<think>模型只顾自己推理，忘了闭合' },
+    { event: 'message_end', metadata: { usage: { prompt_tokens: 1, completion_tokens: 1 } } },
+  ]);
+  assert.equal(text, '', '未闭合时段内流式正文必须为空 —— 前端据此继续显示「思考中」');
+  assert.ok(!text.includes('忘了闭合'), '正文通道不能漏推理：' + JSON.stringify(text));
+  assert.match(r.text, /未产出可见正文/, '收尾正文要显式说明，而不是静默为空');
+  assert.match(reasoning, /忘了闭合/, '推理内容不能丢，留在 reasoning 通道');
+  assert.equal(reasoning.trim(), r.reasoning.trim());
+  assert.ok(!/<\/?think>/.test(r.text) && !/<\/?think>/.test(r.reasoning), '标签不得出现在任何通道');
+});
+
+await testAsync('⑭ 无 <think> 时正文逐字透传、reasoning 通道为空（过滤不能吃掉正文）', async () => {
+  const { text, reasoning, r } = await streamOf([
+    { event: 'message', answer: '## 一、问诊要点\n' },
+    { event: 'message', answer: '- 睡眠时长\n- 是否多梦\n' },
+    { event: 'message_end', metadata: { usage: { prompt_tokens: 1, completion_tokens: 1 } } },
+  ]);
+  assert.equal(reasoning, '', '没有思考段就不该凭空造 reasoning');
+  assert.equal(r.reasoning, '');
+  // 注意：收尾的 res.text 会 .trim()，而流式分片保留尾部换行 —— 这正是前端必须在 done 时
+  // 改用内核权威正文的原因（样例 UI 已如此处理）。
+  assert.equal(text.trim(), r.text, '无 <think> 时正文应逐字透传（仅收尾 trim 差异）');
+  assert.match(text, /问诊要点/);
+});
+
+await testAsync('⑮ ★ 多段 <think>：全部剥掉（只剥第一段会让第二段连着标签留在正文里）', async () => {
+  const { text, reasoning, r } = await streamOf([
+    { event: 'message', answer: '<think>第一段</think>正文中间<think>第二段</think>正文结尾' },
+    { event: 'message_end', metadata: { usage: { prompt_tokens: 1, completion_tokens: 1 } } },
+  ]);
+  assert.ok(!/<\/?think>/.test(text), '正文里不能残留任何标签：' + JSON.stringify(text));
+  assert.ok(text.includes('正文中间') && text.includes('正文结尾'), '两段正文都要在：' + JSON.stringify(text));
+  assert.match(reasoning, /第一段/);
+  assert.match(reasoning, /第二段/, '第二段思考也要收进 reasoning，不能连标签丢在正文里');
+  assert.equal(text.trim(), r.text.trim());
+  assert.equal(reasoning.trim(), r.reasoning.trim());
+});
+
 fs.rmSync(HOME, { recursive: true, force: true });
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

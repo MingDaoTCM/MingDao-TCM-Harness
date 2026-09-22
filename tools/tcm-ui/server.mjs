@@ -56,7 +56,11 @@ function serveStatic(/** @type {any} */ req, /** @type {any} */ res) {
   }
   fs.readFile(abs, (err, buf) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream' });
+    // 样例 UI 处于快速迭代期：禁用缓存，避免浏览器拿旧页面（改动后仅需普通刷新）
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
+      'Cache-Control': 'no-store, must-revalidate',
+    });
     res.end(buf);
   });
 }
