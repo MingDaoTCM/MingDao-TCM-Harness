@@ -62,7 +62,7 @@
 git clone <MingDao-Harness 地址> && cd MingDao-Harness
 
 # 2. 安装中医层到指定 MINGDAO_HOME
-MINGDAO_HOME=~/.mingdao-tcm bash ../Deyi-TCM-Harness/install.sh
+MINGDAO_HOME=~/.mingdao-tcm bash ../MingDao-TCM-Harness/install.sh
 
 # 3. 填入密钥（Dify App API Key + DeepSeek Key）
 #    方式见 install.sh 输出，或手工编辑 $MINGDAO_HOME/credentials.json
@@ -93,9 +93,9 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 
 | 远端 | 仓库 | 可见性 |
 | --- | --- | --- |
-| `github` | `github.com/MingDaoTCM/Deyi-TCM-Harness` | 私有 |
-| `gitee` | `gitee.com/MingDaoTCM/Deyi-TCM-Harness` | 私有 |
-| `gitcode` | `gitcode.com/MingDaoTCM/Deyi-TCM-Harness` | 私有 |
+| `github` | `github.com/MingDaoTCM/MingDao-TCM-Harness` | 私有 |
+| `gitee` | `gitee.com/MingDaoTCM/MingDao-TCM-Harness` | 私有 |
+| `gitcode` | `gitcode.com/MingDaoTCM/MingDao-TCM-Harness` | 私有 |
 
 ```bash
 git push github main && git push gitee main && git push gitcode main
@@ -105,8 +105,8 @@ git push github main && git push gitee main && git push gitcode main
 
 1. **GitHub 用独立 deploy key** —— 本账号的 `~/.ssh/mingdao_git` 是 `MingDao-Harness` 的单仓库
    deploy key，GitHub 不允许同一公钥复用到第二个仓库（`key is already in use`）。故为 Line B
-   单配了 `~/.ssh/mingdao_deyi`，并经 `.ssh/config` 的 `Host github-deyi` 别名接入，
-   远端写作 `git@github-deyi:MingDaoTCM/Deyi-TCM-Harness.git`。
+   单配了 `~/.ssh/mingdao_tcm`，并经 `.ssh/config` 的 `Host github-tcm` 别名接入，
+   远端写作 `git@github-tcm:MingDaoTCM/MingDao-TCM-Harness.git`。
 2. **GitCode 建私有仓库必须用 JSON body** —— `POST /api/v5/user/repos` 若以
    `application/x-www-form-urlencoded` 提交，`private=true` 会被**静默忽略**，仓库变成公开；
    改传 JSON body `{"name":"…","private":true,"description":"…"}` 才生效。

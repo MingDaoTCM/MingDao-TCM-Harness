@@ -11,7 +11,7 @@
 ```
 Line A  MingDao-Harness      通用内核（开源）
           ↑ 依赖（扩展点）
-Line B  Deyi-TCM-Harness     中医垂域层（本仓库，私有）
+Line B  MingDao-TCM-Harness     中医垂域层（本仓库，私有）
 ```
 
 本层**只通过 Line A 的扩展点接入，绝不修改内核源码**：
