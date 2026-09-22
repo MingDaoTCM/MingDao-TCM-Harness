@@ -93,8 +93,8 @@ systemctl --user disable --now deyi-tcm-ui.service   # 关掉自启
 ```bash
 # 内核（MingDao-Harness 检出目录下）
 MINGDAO_HOME=~/.deyi-tcm node src/cli.js web 3821
-# 薄代理（本仓库目录下）
-node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830
+# 薄代理（本仓库目录下）—— --home 指同一个 MINGDAO_HOME，否则「患者」页读不到数据
+node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830 --home ~/.deyi-tcm
 ```
 
 </details>
@@ -124,6 +124,31 @@ node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830
   用**真实的**等待提示条 / Markdown 渲染器 / 工具卡片跑一遍（含表格），用于快速验收排版。
 - 页面禁用浏览器缓存（`Cache-Control: no-store`），改动后普通刷新即可看到最新版。
 
+### 「患者」页：名册 + 历次病历（2026-09-16 新增）
+
+顶部 tab 切到「患者」：
+
+- **左 · 名册** —— 全部患者，**超期未复诊优先**，其次最近就诊在前；每行给出
+  病历号 / 出生年 / 性别 / 就诊次数 / 末次距今，超期的带醒目标记；
+- **右 · 历次病历** —— 时间线（**最早 → 最新**），每次就诊一张卡片，列出全部字段
+  （未填显示「—」），并标出**与上次相比哪几项变了、从什么变成什么**；
+- **「发起复诊 →」** —— 生成一段复诊草稿填进问诊输入框（**医师可再编辑**再发送）。
+
+> 这里给的是**确定性的事实**（哪个字段从什么变成什么），**不含任何疗效判断** ——
+> 「四态对比」（消失/减轻/无变化/加重）是模型判定的产物，仍走 `visit_compare` 工具。
+
+### 数据从哪来（为什么代理要自己读）
+
+内核是**通用**的，不认识「患者」这种领域概念 —— 患者名册与历史是 Line B 的领域数据
+（`MINGDAO_HOME/patients.json` 与 `intake/**`），内核没有对应 API。
+代理与内核跑在同一台机器、同一个 `MINGDAO_HOME` 上，于是由代理提供**只读**端点
+（`GET /api/tcm/patients`、`GET /api/tcm/patients/<病历号>`）。
+
+⚠ 但代理**不重新定义**任何字段名、标签或读语义 —— 全部 `import` 自垂域 Pack
+（`FIELD_CN` / `ALL_FIELDS` / `listSnapshotFiles` / `loadRegistryFrom` …）。
+理由与 2026-09-16 的复诊修复同源：**同一份契约定义在两处必然漂移**。
+连「复诊草稿」都是服务端生成好、前端只负责填进输入框（前端**零字段知识**，有测试守着）。
+
 ## 已知限制（诚实记录）
 
 1. ~~只读意图的指令触发不了 Pack 工具~~ —— **上游 v0.6.3 已修**（只读档判定方向反过来，
@@ -137,11 +162,35 @@ node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830
    （自带内核、一次安装、摄像头权限、自动更新）是下一层，照抄内核 `desktop/` 的
    `main.js` + `electron-builder.yml` 即可。
 
+## 测试
+
+```bash
+node tools/tcm-ui/test/tcm-data.test.mjs    # 数据层：名册排序 / 时间线方向 / 逐项变化 / fail-loud（11 项）
+node tools/tcm-ui/test/ui-wiring.test.mjs   # 接线：静态资源 / DOM id / 模块导出 / 前端零字段知识（7 项）
+```
+
+**没有无头浏览器可用**，所以「页面真的能跑」仍需人工验收（打开 `?demo=1` 看排版）。
+能自动化的那部分已经变成断言：少一个 id、import 了不存在的导出、`public/` 漏文件、
+前端写死字段名 —— 这些在浏览器里表现为「白屏 / 点了没反应」，在这里会当场变红。
+
 ## 文件
 
 | 文件 | 说明 |
 |---|---|
 | `tcm-ui.sh` | 一键启停（start/stop/restart/status/logs）；幂等，端口健康检查，按版本发现内核 |
 | `install-autostart.sh` | 开机自启安装/卸载/查状态（systemd --user 优先，XDG autostart 兜底） |
-| `server.mjs` | 薄代理 + 静态服务（零依赖，`node:http`）；含目录穿越防护、SSE 不缓冲透传 |
-| `public/index.html` | 问诊界面（单文件，无构建步骤）；Markdown 渲染镜像内核 `src/web/util.js`（另支持表格） |
+| `server.mjs` | 薄代理 + 静态服务（零依赖，`node:http`）：转发 `/api/*` 给内核（SSE 不缓冲）+ 自有只读端点 `/api/tcm/*` |
+| `tcm-data.mjs` | 名册/历史的数据层；**不自己定义字段**，全部 import 自垂域 Pack |
+| `public/index.html` | 外壳：视图容器 + 问诊表单 HTML（无构建步骤） |
+| `public/app.css` | 全部样式（含问诊 / 患者两套） |
+| `public/js/util.js` | `$` / HTML 转义 / Markdown 轻渲染（镜像内核 `src/web/util.js`，另支持表格）/ `<think>` 兜底过滤 |
+| `public/js/api.js` | HTTP 薄封装：`getJSON` / `postJSON` / `streamSSE` |
+| `public/js/consult.js` | 问诊视图：表单合成 + 对话（工具卡片 / 正文 / 思考过程）+ `?demo=1` 离线预览 |
+| `public/js/patients.js` | 患者视图：名册 + 时间线 + 逐项变化（**零字段知识**） |
+| `public/js/app.js` | 启动、视图切换、内核连接状态 |
+| `test/tcm-data.test.mjs` | 数据层单测 |
+| `test/ui-wiring.test.mjs` | 前端接线测试 |
+
+> 「问诊台」原先是一个 640 行的单文件 `index.html`（HTML + CSS + JS 全在一起）。
+> 2026-09-16 拆成上表的多文件（浏览器原生 ES module，**仍然没有构建步骤**）——
+> 目的是加「患者」页时不至于把单文件撑成难以维护的一坨。

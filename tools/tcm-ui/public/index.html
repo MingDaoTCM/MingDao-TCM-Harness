@@ -4,637 +4,104 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>得一中医 · 问诊台</title>
-<style>
-  :root{
-    --bg:#0f1216; --panel:#161b22; --panel2:#1c232c; --line:#2a323d;
-    --fg:#e6edf3; --dim:#9aa7b4; --faint:#6b7784;
-    --accent:#3fb950; --accent2:#58a6ff; --warn:#d29922; --err:#f85149;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
-  header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
-  header b{font-size:15px}
-  header .tag{font-size:12px;color:var(--faint)}
-  header .sp{flex:1}
-  header .st{font-size:12px;color:var(--dim)}
-  main{display:flex;height:calc(100vh - 49px)}
-  aside{width:400px;min-width:400px;border-right:1px solid var(--line);overflow-y:auto;padding:14px;background:var(--panel)}
-  section.chat{flex:1;display:flex;flex-direction:column;min-width:0}
-  h3{margin:14px 0 8px;font-size:12.5px;color:var(--dim)}
-  h3:first-child{margin-top:0}
-  h3 .req{color:var(--err);font-size:11px;margin-left:4px}
-  h3 .opt{color:var(--faint);font-size:11px;margin-left:4px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  label{display:block;font-size:12px;color:var(--faint);margin:0 0 3px}
-  input[type=text],textarea,select{
-    width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);
-    padding:7px 9px;font:13px/1.5 inherit;outline:none
-  }
-  input:focus,textarea:focus{border-color:var(--accent2)}
-  textarea{resize:vertical;min-height:50px}
-  .field{margin-bottom:9px}
-  .row{display:flex;gap:8px;margin-top:12px}
-  button{background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:8px 12px;font:13px inherit;cursor:pointer}
-  button:hover{border-color:var(--accent2)}
-  button.primary{background:var(--accent);border-color:var(--accent);color:#04120a;font-weight:600}
-  button.primary:disabled{opacity:.5;cursor:not-allowed}
-  button.ghost{background:transparent}
-  #thumb{max-width:100%;margin-top:6px;border-radius:6px;border:1px solid var(--line);display:none}
-  .conv{flex:1;overflow-y:auto;padding:16px 18px}
-  .turn{max-width:min(900px,100%);margin:0 0 18px}
-  .q{background:#1f6feb22;border:1px solid #1f6feb55;border-radius:10px;padding:9px 12px;white-space:pre-wrap;font-size:13px}
-  .q .who{font-size:11.5px;color:var(--faint);margin-bottom:3px}
-  /* 工具区固定在上、问诊正文固定在下 —— 与事件到达顺序无关 */
-  .toolzone{margin:8px 0 0}
-  .toolzone .zt{font-size:11.5px;color:var(--faint);margin:2px 0 5px}
-  .tool{border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:5px 0;font-size:12.5px}
-  .tool .head{display:flex;gap:8px;align-items:center;padding:6px 10px}
-  .tool .name{color:var(--accent2)}
-  .tool .raw{font-family:ui-monospace,Menlo,monospace;color:var(--faint);font-size:11px}
-  .tool .st{margin-left:auto;color:var(--dim);white-space:nowrap}
-  .tool .st.ok{color:var(--accent)} .tool .st.bad{color:var(--err)}
-  .tool pre{margin:0;padding:0 10px 9px;white-space:pre-wrap;color:var(--dim);font:12px/1.55 ui-monospace,Menlo,monospace;max-height:230px;overflow:auto}
-  .answer{margin-top:10px;border-top:1px dashed var(--line);padding-top:10px}
-  .answer .zt{font-size:11.5px;color:var(--faint);margin-bottom:5px}
-  .answer .body{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px;white-space:pre-wrap}
-  /* 首字等待提示：Dify 工作流冷启动常见 10~60s 无任何事件，避免误判为卡死 */
-  .thinking{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:12.5px;white-space:normal}
-  .thinking .orb{flex:none;width:11px;height:11px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent2);animation:spin .8s linear infinite}
-  .thinking .tt{color:var(--dim)}
-  .thinking .ph{color:var(--accent2)}
-  .thinking .sec{margin-left:auto;color:var(--faint);font-variant-numeric:tabular-nums}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .note{color:var(--faint);font-size:12.5px;line-height:1.75}
-  /* 模型思考过程：与问诊正文分流、视觉从属（更小更淡、虚线框），正文开始时自动收拢 */
-  .thinkbox{margin:0 0 9px;border:1px dashed var(--line);border-radius:8px;background:#ffffff05}
-  .thinkbox .thead{display:flex;align-items:center;gap:6px;padding:6px 11px;font-size:11.5px;color:var(--faint);cursor:pointer;user-select:none}
-  .thinkbox .thead:hover{color:var(--dim)}
-  .thinkbox .tname{color:var(--faint)}
-  .thinkbox .arw{display:inline-block;transition:transform .15s}
-  .thinkbox.folded .arw{transform:rotate(-90deg)}
-  .thinkbox .rbody{padding:0 11px 8px;font-size:12px;line-height:1.7;color:var(--faint);white-space:pre-wrap;max-height:230px;overflow:auto;word-break:break-word}
-  .thinkbox.streaming .rbody::after{content:'▌';animation:blink 1.1s infinite}
-  .thinkbox.folded .rbody{display:none}
-  .caret{display:inline-block;width:7px;height:14px;margin-left:2px;vertical-align:-2px;background:var(--accent2);animation:blink 1.1s infinite}
-  /* Markdown 正文（镜像内核排版，另加表格） */
-  .answer .body.md{white-space:normal;line-height:1.75;font-size:13px}
-  .answer .body.md>:first-child{margin-top:0}
-  .answer .body.md>:last-child{margin-bottom:0}
-  .answer .body.md h1,.answer .body.md h2,.answer .body.md h3,.answer .body.md h4{margin:15px 0 7px;line-height:1.45}
-  .answer .body.md h1{font-size:17px}
-  .answer .body.md h2{font-size:15.5px;color:var(--accent2);border-bottom:1px solid var(--line);padding-bottom:5px}
-  .answer .body.md h3{font-size:14px;color:var(--accent2)}
-  .answer .body.md h4{font-size:13px;color:var(--dim)}
-  .answer .body.md p{margin:0 0 9px}
-  .answer .body.md ul,.answer .body.md ol{margin:0 0 9px;padding-left:22px}
-  .answer .body.md li{margin:3px 0}
-  .answer .body.md code{background:#ffffff14;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font:12px ui-monospace,Menlo,monospace}
-  .answer .body.md pre{margin:0 0 10px;padding:9px 11px;background:#0d1117;border:1px solid var(--line);border-radius:8px;overflow:auto}
-  .answer .body.md pre code{background:none;border:0;padding:0}
-  .answer .body.md blockquote{margin:0 0 10px;padding:7px 12px;border-left:3px solid var(--accent2);background:#ffffff08;border-radius:0 8px 8px 0;color:var(--dim)}
-  .answer .body.md hr{border:0;border-top:1px solid var(--line);margin:13px 0}
-  .answer .body.md table{border-collapse:collapse;width:100%;margin:0 0 10px;font-size:12.5px}
-  .answer .body.md th,.answer .body.md td{border:1px solid var(--line);padding:5px 9px;text-align:left;vertical-align:top}
-  .answer .body.md th{background:#ffffff0d;color:var(--accent2);font-weight:600;white-space:nowrap}
-  .answer .body.md tbody tr:nth-child(even){background:#ffffff05}
-  .banner{padding:7px 11px;border-radius:6px;background:#d2992222;border:1px solid #d2992255;color:var(--warn);font-size:12.5px;margin:0 0 10px}
-  .errline{padding:7px 11px;border-radius:6px;background:#f8514922;border:1px solid #f8514955;color:var(--err);font-size:12.5px;margin:6px 0}
-  .composer{border-top:1px solid var(--line);padding:10px 16px;background:var(--panel);display:flex;gap:8px;align-items:flex-end}
-  .composer textarea{min-height:44px;max-height:170px}
-  .hint{font-size:11.5px;color:var(--faint);padding:0 16px 10px;background:var(--panel)}
-  .spin{animation:blink 1.1s infinite}
-  @keyframes blink{50%{opacity:.35}}
-</style>
+<link rel="stylesheet" href="/app.css" />
 </head>
 <body>
 <header>
   <b>得一中医 · 问诊台</b>
+  <nav class="tabs">
+    <button class="tab active" data-view="consult">问诊</button>
+    <button class="tab" data-view="patients">患者</button>
+  </nav>
   <span class="tag">独立前端 · 薄代理（内核零改动）</span>
   <span class="sp"></span>
   <span class="st" id="st">未连接</span>
 </header>
 
 <main>
-  <aside>
-    <h3>患者资料</h3>
-    <div class="grid">
-      <div><label>姓名</label><input id="pName" type="text" placeholder="张三" /></div>
-      <div><label>出生年</label><input id="pBirth" type="text" placeholder="1985" /></div>
-      <div><label>性别</label>
-        <select id="pSex"><option value="">—</option><option>男</option><option>女</option></select>
+  <!-- ══════════════════════ 问诊 ══════════════════════ -->
+  <div class="view" id="view-consult">
+    <aside>
+      <h3>患者资料</h3>
+      <div class="grid">
+        <div><label>姓名</label><input id="pName" type="text" placeholder="张三" /></div>
+        <div><label>出生年</label><input id="pBirth" type="text" placeholder="1985" /></div>
+        <div><label>性别</label>
+          <select id="pSex"><option value="">—</option><option>男</option><option>女</option></select>
+        </div>
+        <div><label>就诊类型</label>
+          <select id="pKind"><option value="auto">自动判断</option><option value="first">首诊</option><option value="follow">复诊</option></select>
+        </div>
       </div>
-      <div><label>就诊类型</label>
-        <select id="pKind"><option value="auto">自动判断</option><option value="first">首诊</option><option value="follow">复诊</option></select>
+      <div style="font-size:11.5px;color:var(--faint);margin-top:6px">
+        病历号不用填 —— <b>复诊自动提取历史病历号，初诊由系统自动分配</b>；
+        同名多命中时系统会把候选交给你确认，不会自己挑一个。
       </div>
-    </div>
-    <div style="font-size:11.5px;color:var(--faint);margin-top:6px">
-      病历号不用填 —— <b>复诊自动提取历史病历号，初诊由系统自动分配</b>；
-      同名多命中时系统会把候选交给你确认，不会自己挑一个。
-    </div>
 
-    <h3>主诉<span class="req">必填</span></h3>
-    <div class="field"><textarea id="f_zhushu" placeholder="失眠多梦三个月"></textarea></div>
+      <h3>主诉<span class="req">必填</span></h3>
+      <div class="field"><textarea id="f_zhushu" placeholder="失眠多梦三个月"></textarea></div>
 
-    <h3>现病史<span class="req">必填</span></h3>
-    <div class="field"><textarea id="f_xianbingshi" placeholder="三月前无诱因出现入睡困难，伴多梦易醒；未系统治疗…"></textarea></div>
+      <h3>现病史<span class="req">必填</span></h3>
+      <div class="field"><textarea id="f_xianbingshi" placeholder="三月前无诱因出现入睡困难，伴多梦易醒；未系统治疗…"></textarea></div>
 
-    <h3>既往史 · 家族史 · 过敏史 · 流行病史<span class="opt">可选</span></h3>
-    <div class="field"><label>既往史</label><textarea id="f_jiwangshi" placeholder="高血压十年；2024 年宫颈癌术后"></textarea></div>
-    <div class="field"><label>家族史</label><input id="f_jiazushi" type="text" placeholder="母亲有高血压" /></div>
-    <div class="field"><label>过敏史</label><input id="f_guominshi" type="text" placeholder="青霉素过敏" /></div>
-    <div class="field"><label>流行病史</label><input id="f_liuxingbingshi" type="text" placeholder="否认疫区接触" /></div>
+      <h3>既往史 · 家族史 · 过敏史 · 流行病史<span class="opt">可选</span></h3>
+      <div class="field"><label>既往史</label><textarea id="f_jiwangshi" placeholder="高血压十年；2024 年宫颈癌术后"></textarea></div>
+      <div class="field"><label>家族史</label><input id="f_jiazushi" type="text" placeholder="母亲有高血压" /></div>
+      <div class="field"><label>过敏史</label><input id="f_guominshi" type="text" placeholder="青霉素过敏" /></div>
+      <div class="field"><label>流行病史</label><input id="f_liuxingbingshi" type="text" placeholder="否认疫区接触" /></div>
 
-    <h3>体格检查<span class="opt">可选</span></h3>
-    <div class="field"><textarea id="f_tigejiancha" placeholder="T 36.5℃ P 78次/分 R 18次/分 BP 138/86mmHg"></textarea></div>
+      <h3>体格检查<span class="opt">可选</span></h3>
+      <div class="field"><textarea id="f_tigejiancha" placeholder="T 36.5℃ P 78次/分 R 18次/分 BP 138/86mmHg"></textarea></div>
 
-    <h3>四诊 · 舌象 / 脉象<span class="opt">可选</span></h3>
-    <div class="field"><label>舌象（望诊）</label><input id="f_shexiang" type="text" placeholder="舌红苔黄" /></div>
-    <div class="field">
-      <label>舌象照片（拍照或选图，随问诊一起交给 Dify）</label>
-      <input id="tongue" type="file" accept="image/*" capture="environment" />
-      <img id="thumb" alt="舌象预览" />
-      <div id="tongueTip" style="font-size:11.5px;color:var(--faint);margin-top:4px"></div>
-    </div>
-    <div class="field"><label>脉象（切诊，医师指下所得）</label><input id="f_maixiang" type="text" placeholder="脉弦细" /></div>
+      <h3>四诊 · 舌象 / 脉象<span class="opt">可选</span></h3>
+      <div class="field"><label>舌象（望诊）</label><input id="f_shexiang" type="text" placeholder="舌红苔黄" /></div>
+      <div class="field">
+        <label>舌象照片（拍照或选图，随问诊一起交给 Dify）</label>
+        <input id="tongue" type="file" accept="image/*" capture="environment" />
+        <img id="thumb" alt="舌象预览" />
+        <div id="tongueTip" style="font-size:11.5px;color:var(--faint);margin-top:4px"></div>
+      </div>
+      <div class="field"><label>脉象（切诊，医师指下所得）</label><input id="f_maixiang" type="text" placeholder="脉弦细" /></div>
 
-    <h3>随访<span class="opt">可选</span></h3>
-    <div class="field"><textarea id="f_suifang" placeholder="两周后复诊；嘱记录睡眠日记"></textarea></div>
+      <h3>随访<span class="opt">可选</span></h3>
+      <div class="field"><textarea id="f_suifang" placeholder="两周后复诊；嘱记录睡眠日记"></textarea></div>
 
-    <div class="row">
-      <button class="primary" id="compose" style="flex:1">合成问诊消息 →</button>
-      <button class="ghost" id="clearForm">清空</button>
-    </div>
-    <div style="font-size:11.5px;color:var(--faint);margin-top:8px">
-      合成后填入右下输入框，<b>可再编辑</b>再发送 —— 不会替你做任何临床判断。
-    </div>
-  </aside>
+      <div class="row">
+        <button class="primary" id="compose" style="flex:1">合成问诊消息 →</button>
+        <button class="ghost" id="clearForm">清空</button>
+      </div>
+      <div style="font-size:11.5px;color:var(--faint);margin-top:8px">
+        合成后填入右下输入框，<b>可再编辑</b>再发送 —— 不会替你做任何临床判断。
+      </div>
+    </aside>
 
-  <section class="chat">
-    <div class="conv" id="conv"></div>
-    <div class="composer">
-      <textarea id="input" placeholder="直接描述病情，或先在左侧填表后点「合成问诊消息」（Enter 发送 / Shift+Enter 换行）"></textarea>
-      <button class="primary" id="send">发送</button>
-      <button id="stop" style="display:none">停止</button>
-    </div>
-    <div class="hint" id="hint">每轮回复：上方是工具执行区，下方是问诊工作流正文。</div>
-  </section>
+    <section class="chat">
+      <div class="conv" id="conv"></div>
+      <div class="composer">
+        <textarea id="input" placeholder="直接描述病情，或先在左侧填表后点「合成问诊消息」（Enter 发送 / Shift+Enter 换行）"></textarea>
+        <button class="primary" id="send">发送</button>
+        <button id="stop" style="display:none">停止</button>
+      </div>
+      <div class="hint" id="hint">每轮回复：上方是工具执行区，下方是问诊工作流正文。</div>
+    </section>
+  </div>
+
+  <!-- ══════════════════════ 患者 ══════════════════════ -->
+  <div class="view" id="view-patients" hidden>
+    <aside class="roster">
+      <div class="rhead">
+        <h3>患者名册</h3>
+        <div class="sum" id="rosterSum">加载中…</div>
+        <div class="row"><button id="rosterRefresh" style="flex:1">刷新</button></div>
+      </div>
+      <div class="plist" id="rosterList"></div>
+    </aside>
+    <section class="detail" id="patientDetail">
+      <div class="pempty">从左侧选择一位患者，查看历次病历与逐次变化。</div>
+    </section>
+  </div>
 </main>
 
-<script>
-const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-// ── Markdown 轻渲染 ─────────────────────────────────────────
-// 镜像内核 src/web/util.js 的 renderMarkdown（标题/段落/真列表/引用/分割线/代码块），
-// 额外支持 GFM 表格 —— Dify 工作流的中医问诊正文大量使用分节标题与四诊表格。
-function renderInline(s) {
-  return esc(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-    .replace(/\*([^*\s][^*]*)\*/g, '<i>$1</i>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s'"<>)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-}
-function renderMarkdown(text) {
-  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
-  let out = '', inCode = false, codeLang = '', code = [], para = [], list = null, tbl = [];
-  const flushPara = () => { if (para.length) { out += '<p>' + para.join('<br>') + '</p>'; para = []; } };
-  const flushList = () => {
-    if (list) { out += '<' + list.type + '>' + list.items.map((i) => '<li>' + i + '</li>').join('') + '</' + list.type + '>'; list = null; }
-  };
-  const flushTable = () => {
-    if (!tbl.length) return;
-    const cells = (r) => r.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
-    const head = cells(tbl[0]);
-    out += '<table><thead><tr>' + head.map((c) => '<th>' + renderInline(c) + '</th>').join('') + '</tr></thead><tbody>'
-      + tbl.slice(1).map((r) => '<tr>' + cells(r).map((c) => '<td>' + renderInline(c) + '</td>').join('') + '</tr>').join('')
-      + '</tbody></table>';
-    tbl = [];
-  };
-  const flushAll = () => { flushTable(); flushList(); flushPara(); };
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (t.startsWith('```')) {
-      if (!inCode) { flushAll(); inCode = true; codeLang = t.slice(3).trim().split(/\s+/)[0] || ''; code = []; }
-      else { out += '<pre><code class="lang-' + esc(codeLang) + '">' + esc(code.join('\n')) + '</code></pre>'; inCode = false; }
-      continue;
-    }
-    if (inCode) { code.push(lines[i]); continue; }
-    if (t === '') { flushAll(); continue; }
-    const nxt = (lines[i + 1] || '').trim();
-    if (t.startsWith('|') && t.endsWith('|') && /^\|[\s:|-]+\|$/.test(nxt)) { flushList(); flushPara(); tbl = [t]; i++; continue; }
-    if (tbl.length && t.startsWith('|') && t.endsWith('|')) { tbl.push(t); continue; }
-    if (tbl.length) flushTable();
-    const h = t.match(/^(#{1,6})\s+(.*)$/);
-    if (h) { flushList(); flushPara(); const lv = Math.min(h[1].length, 4); out += '<h' + lv + '>' + renderInline(h[2]) + '</h' + lv + '>'; continue; }
-    const ul = t.match(/^([-*+])\s+(.*)$/);
-    if (ul) { flushPara(); if (!list || list.type !== 'ul') { flushList(); list = { type: 'ul', items: [] }; } list.items.push(renderInline(ul[2])); continue; }
-    const ol = t.match(/^(\d+)[.)]\s+(.*)$/);
-    if (ol) { flushPara(); if (!list || list.type !== 'ol') { flushList(); list = { type: 'ol', items: [] }; } list.items.push(renderInline(ol[2])); continue; }
-    if (/^>\s?/.test(t)) { flushList(); flushPara(); out += '<blockquote>' + renderInline(t.replace(/^>\s?/, '')) + '</blockquote>'; continue; }
-    if (/^(-{3,}|\*{3,})$/.test(t)) { flushList(); flushPara(); out += '<hr>'; continue; }
-    flushList();
-    para.push(renderInline(t));
-  }
-  if (inCode && code.length) out += '<pre><code>' + esc(code.join('\n')) + '</code></pre>';
-  flushAll();
-  return out;
-}
-
-// ── 首字等待提示（思考中 / 工具执行中 + 自走计时器）──────────
-function startThinking(body) {
-  const el = body.querySelector('.thinking');
-  if (!el) return null;
-  const sec = el.querySelector('.sec');
-  const ph = el.querySelector('.ph');
-  const t0 = Date.now();
-  let serverPhase = '';
-  const tick = () => {
-    const s = Math.round((Date.now() - t0) / 1000);
-    sec.textContent = s >= 60 ? Math.floor(s / 60) + ' 分 ' + (s % 60) + ' 秒' : s + 's';
-    // 内核 progress 心跳 5s 一次、首个心跳前无阶段语义 —— 本地先给出确定性文案
-    if (!serverPhase) ph.textContent = s >= 20 ? '· 工作流运行中（较慢）' : '';
-  };
-  tick();
-  const h = setInterval(tick, 200);
-  return {
-    phase(p) { if (p) { serverPhase = p; ph.textContent = '· ' + p; } },
-    stop() { clearInterval(h); },
-  };
-}
-
-// <think> 段的可见部分 —— 与 provider 端 (dify.mjs) 同一套语义：
-// 完整的 <think>…</think> 整段隐去；未闭合时其后全部隐去。
-// 这是第二道防线：即使某个 provider 漏了过滤，医师也不会在正文里看到模型的内部推理。
-function visibleOf(s) {
-  const t = String(s ?? '');
-  const m = /<think>[\s\S]*?<\/think>/.exec(t);
-  if (m) return t.replace(m[0], '');
-  const i = t.indexOf('<think>');
-  return i >= 0 ? t.slice(0, i) : t;
-}
-/** 是否正处在未闭合的推理段里（用于把等待提示换成「深度思考中」） */
-const inThink = (s) => {
-  const t = String(s ?? '');
-  return t.indexOf('<think>') >= 0 && !/<\/think>/.test(t);
-};
-
-// ── 模型思考过程（reasoning 通道）────────────────────────────
-// 医师定稿：思考过程保留可看（对辨证有参考），但视觉从属 —— 更小更淡、虚线框、可折叠。
-// 内核把它作为独立的 reasoning 通道送来，与受红线约束的正文天然分流。
-function reasoningSink(turn) {
-  const box = turn.querySelector('.thinkbox');
-  const rb = box.querySelector('.rbody');
-  const name = box.querySelector('.tname');
-  let buf = '', raf = 0;
-  box.querySelector('.thead').onclick = () => box.classList.toggle('folded');
-  // 实测一轮思考有 1800 个分片：按帧合并写入，避免 O(n²) 重排与刷屏式 scroll
-  const flush = () => {
-    raf = 0;
-    rb.textContent = buf;                       // 纯文本：思考过程不该当 Markdown 解析
-    name.textContent = '模型思考过程 · ' + buf.length + ' 字';
-    scroll();
-  };
-  return {
-    push(t) {
-      buf += t;
-      if (box.hidden) { box.hidden = false; box.classList.add('streaming'); }
-      if (!raf) raf = requestAnimationFrame(flush);
-    },
-    /** 正文开始 → 收拢，避免一大段推理把正文挤到屏幕外（点标题可再展开） */
-    fold() { if (buf && !box.hidden) box.classList.add('folded'); },
-    stop() { if (raf) { cancelAnimationFrame(raf); raf = 0; flush(); } box.classList.remove('streaming'); },
-  };
-}
-
-// 流式重绘：每帧最多一次，避免长正文下 O(n²) 重排
-function paint(body, raw, streaming) {
-  body.classList.add('md');
-  body.innerHTML = renderMarkdown(visibleOf(raw));
-  if (!streaming) return;
-  let host = body.lastElementChild || body;
-  if (/^(UL|OL)$/.test(host.tagName) && host.lastElementChild) host = host.lastElementChild;
-  const c = document.createElement('span'); c.className = 'caret'; host.appendChild(c);
-}
-
-/** 工具注册名 → 医师看得懂的名字（把内核加的 pack__<pack>__ 前缀翻成人话） */
-const TOOL_LABEL = {
-  patient_lookup: '患者定位',
-  patient_register: '新患者登记',
-  intake_collect: '病历落盘',
-  visit_compare: '复诊四态对比',
-  followup_board: '回访 / 随访',
-};
-const toolLabel = (raw) => {
-  const s = String(raw || '');
-  const bare = s.startsWith('pack__') ? s.split('__').slice(2).join('__') : s;
-  return TOOL_LABEL[bare] || bare;
-};
-
-let session = null;
-let generating = false;
-let ctrl = null;
-let pendingAttachments = [];
-
-// ── 舌象照片 ──────────────────────────────────────────────
-$('#tongue').addEventListener('change', async (e) => {
-  const f = e.target.files && e.target.files[0];
-  const tip = $('#tongueTip'); const thumb = $('#thumb');
-  pendingAttachments = [];
-  if (!f) { thumb.style.display = 'none'; tip.textContent = ''; return; }
-  if (!/^image\//.test(f.type)) { tip.textContent = '只支持图片文件'; return; }
-  const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(f); });
-  if (dataUrl.length > 7 * 1024 * 1024) { tip.textContent = '图片过大（内核限制单张 ≤5MB）'; return; }
-  pendingAttachments = [{ type: 'image', name: f.name || '舌象.jpg', dataUrl }];
-  thumb.src = dataUrl; thumb.style.display = 'block';
-  tip.textContent = '已附上 —— 发送时内核会把照片交给 Dify 工作流（Dify 侧需开启视觉）。';
-});
-
-// ── 合成问诊消息 ──────────────────────────────────────────
-const OPT_FIELDS = [
-  ['jiwangshi', '既往史'], ['jiazushi', '家族史'], ['guominshi', '过敏史'], ['liuxingbingshi', '流行病史'],
-  ['tigejiancha', '体格检查'], ['shexiang', '舌象'], ['maixiang', '脉象'], ['suifang', '随访'],
-];
-$('#compose').onclick = () => {
-  const name = $('#pName').value.trim();
-  const birth = $('#pBirth').value.trim();
-  const sex = $('#pSex').value;
-  const kind = $('#pKind').value;
-  const head = [];
-  if (name) head.push(name);
-  if (birth) head.push(birth + '年生');
-  if (sex) head.push(sex);
-  const lines = [];
-  const prefix = kind === 'follow' ? '复诊' : (kind === 'first' ? '首诊' : '');
-  if (head.length || prefix) lines.push((prefix ? prefix + '：' : '') + head.join('，') + '。');
-  const zhushu = $('#f_zhushu').value.trim();
-  const xbs = $('#f_xianbingshi').value.trim();
-  if (zhushu) lines.push('主诉：' + zhushu);
-  if (xbs) lines.push('现病史：' + xbs);
-  for (const [key, label] of OPT_FIELDS) {
-    const v = ($('#f_' + key)?.value || '').trim();
-    if (v) lines.push(label + '：' + v);
-  }
-  if (pendingAttachments.length) lines.push('（舌象照片见附件）');
-  if (kind === 'follow') lines.push('（复诊：请回顾上次并逐项对比本次变化）');
-  $('#input').value = lines.filter(Boolean).join('\n');
-  $('#input').focus();
-};
-
-$('#clearForm').onclick = () => {
-  for (const id of ['f_zhushu', 'f_xianbingshi', ...OPT_FIELDS.map(([k]) => 'f_' + k)]) { const el = $('#' + id); if (el) el.value = ''; }
-  for (const id of ['pName', 'pBirth']) $('#' + id).value = '';
-  $('#pSex').value = ''; $('#pKind').value = 'auto';
-  $('#tongue').value = ''; $('#thumb').style.display = 'none'; $('#tongueTip').textContent = '';
-  pendingAttachments = [];
-};
-
-// ── 每轮回复：工具区（上） + 问诊正文（下） ─────────────────
-function addTurn(userText, hasAttachment) {
-  const turn = document.createElement('div');
-  turn.className = 'turn';
-  turn.innerHTML = '<div class="q"><div class="who">医师' + (hasAttachment ? ' · 附舌象照片' : '') + '</div>' + esc(userText) + '</div>'
-    + '<div class="toolzone" style="display:none"><div class="zt">工具执行</div><div class="cards"></div></div>'
-    + '<div class="answer"><div class="zt">问诊工作流正文</div>'
-    + '<div class="thinkbox" hidden><div class="thead"><span class="arw">▾</span><span class="tname">模型思考过程</span></div><div class="rbody"></div></div>'
-    + '<div class="body md">'
-    + '<div class="thinking"><span class="orb"></span><span class="tt">正在思考中…</span><span class="ph"></span><span class="sec">0s</span></div>'
-    + '</div></div>';
-  $('#conv').appendChild(turn);
-  scroll();
-  return turn;
-}
-function toolCard(turn, rawName) {
-  const zone = turn.querySelector('.toolzone');
-  const cards = turn.querySelector('.cards');
-  zone.style.display = '';
-  const d = document.createElement('div');
-  d.className = 'tool';
-  d.innerHTML = '<div class="head"><span>🔧</span><span class="name">' + esc(toolLabel(rawName))
-    + '</span><span class="raw">' + esc(rawName) + '</span>'
-    + '<span class="st"><span class="spin">执行中…</span></span></div>';
-  cards.appendChild(d);
-  scroll();
-  return d;
-}
-function scroll() { const c = $('#conv'); c.scrollTop = c.scrollHeight; }
-
-async function send(text, attachments) {
-  if (generating) return;
-  text = String(text || '').trim();
-  if (!text) return;
-  generating = true; $('#send').disabled = true; $('#stop').style.display = '';
-  const turn = addTurn(text, Boolean(attachments && attachments.length));
-  const body = turn.querySelector('.answer .body');
-  const cards = new Map();
-  let raf = 0;
-  const T = { think: startThinking(body), raw: '' };
-  const R = reasoningSink(turn);
-  ctrl = new AbortController();
-  const pushText = (t) => {
-    T.raw += t;
-    if (T.think) {
-      // <think> 段由 provider 分流到 reasoning 通道，正文分片天然干净；
-      // 这里只在「正文仍无可见字」时保留等待提示，否则会出现「提示条没了、正文却是空的」。
-      if (!visibleOf(T.raw).trim()) { T.think.phase(inThink(T.raw) ? '模型深度思考中' : ''); return; }
-      T.think.stop(); T.think = null; body.innerHTML = ''; // 首个可见字到达 → 撤下等待提示
-      R.fold(); R.stop();                                  // 正文开始了 → 思考过程收拢
-    }
-    if (!raf) raf = requestAnimationFrame(() => { raf = 0; paint(body, T.raw, true); scroll(); });
-  };
-
-  const payload = { message: text };
-  if (session) payload.file = session;
-  if (attachments && attachments.length) payload.attachments = attachments;
-
-  try {
-    const resp = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: ctrl.signal });
-    if (!resp.ok) {
-      const j = await resp.json().catch(() => ({}));
-      if (T.think) { T.think.stop(); T.think = null; }
-      R.stop();
-      body.classList.remove('md');
-      body.innerHTML = '<div class="errline">' + esc(j.error || ('HTTP ' + resp.status)) + '</div>';
-      return;
-    }
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n\n')) >= 0) {
-        const block = buf.slice(0, i); buf = buf.slice(i + 2);
-        for (const line of block.split('\n')) {
-          if (!line.startsWith('data:')) continue;
-          let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
-          handleEvent(ev, turn, body, cards, pushText, T, R);
-        }
-      }
-    }
-  } catch (e) {
-    if (T.think) { T.think.stop(); T.think = null; }
-    R.stop();
-    if (String(e?.name) !== 'AbortError') body.innerHTML += '<div class="errline">连接失败：' + esc(e?.message || e) + '</div>';
-  } finally {
-    if (raf) { cancelAnimationFrame(raf); raf = 0; }
-    if (T.think) { T.think.stop(); T.think = null; }
-    R.stop();
-    if (visibleOf(T.raw).trim()) paint(body, T.raw, false);
-    else if (!body.querySelector('.errline')) body.innerHTML = '<div class="note">本轮没有正文输出 —— 可能被领域约束拦截，或工作流未返回内容。</div>';
-    generating = false; $('#send').disabled = false; $('#stop').style.display = 'none'; ctrl = null;
-  }
-}
-
-async function handleEvent(ev, turn, body, cards, pushText, T, R) {
-  switch (ev.type) {
-    case 'text': pushText(String(ev.delta || '')); break;
-    case 'reasoning': {
-      // 内核的独立思考通道：与正文分流，样式更淡更小（标签由 provider 侧剥离，不会出现）
-      R.push(String(ev.delta || ''));
-      if (T?.think) T.think.phase('模型深度思考中');
-      break;
-    }
-    case 'progress': if (T?.think) T.think.phase(String(ev.phase || '') + (Number(ev.steps) ? ' · 已执行 ' + ev.steps + ' 步' : '')); break;
-    case 'toolStart': cards.set(ev.seq, toolCard(turn, ev.name)); break;
-    case 'tool': {
-      const card = cards.get(ev.seq) || toolCard(turn, ev.name);
-      const r = ev.result || {};
-      const ok = r.ok !== false;
-      const st = card.querySelector('.st');
-      st.className = 'st ' + (ok ? 'ok' : 'bad');
-      st.textContent = (ok ? '✓' : '✖') + (ev.durationMs != null ? ' ' + ev.durationMs + 'ms' : '');
-      if (r.output) { const pre = document.createElement('pre'); pre.textContent = String(r.output).slice(0, 2000); card.appendChild(pre); }
-      if (r.error) { const pre = document.createElement('pre'); pre.style.color = 'var(--err)'; pre.textContent = String(r.error); card.appendChild(pre); }
-      scroll();
-      break;
-    }
-    case 'toolDenied': {
-      const d = document.createElement('div'); d.className = 'errline';
-      d.textContent = '✖ 工具未执行：' + (ev.reason || '未授权') + '（' + toolLabel(ev.name) + '）';
-      const zone = turn.querySelector('.toolzone'); zone.style.display = '';
-      turn.querySelector('.cards').appendChild(d); scroll();
-      break;
-    }
-    case 'banner': {
-      const d = document.createElement('div'); d.className = 'banner'; d.textContent = ev.text || '';
-      turn.insertBefore(d, turn.firstChild); scroll();
-      break;
-    }
-    case 'ask': {
-      const yes = window.confirm(ev.question || '是否允许该操作？');
-      await fetch('/api/permission', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: ev.id, answer: yes ? 'y' : 'n', taskId: ev.taskId }) }).catch(() => {});
-      break;
-    }
-    case 'error': {
-      const d = document.createElement('div'); d.className = 'errline'; d.textContent = ev.message || '出错了';
-      turn.appendChild(d); scroll();
-      break;
-    }
-    case 'done': {
-      // done.text 才是内核的**权威正文**：领域红线的「改写 / 拦截」只体现在这里，
-      // 流式分片可能早于改写（改写是一次非流式调用，没有分片）。
-      // 因此收尾时必须以内核给的正文覆盖累积结果，否则医师看到的可能是改写前的版本。
-      if (typeof ev.text === 'string' && ev.text.trim()) T.raw = ev.text;
-      if (ev.session) { session = ev.session; $('#hint').textContent = '会话：' + session + '（后续消息沿用同一上下文）'; }
-      if (ev.note) { const d = document.createElement('div'); d.className = 'errline'; d.style.color = 'var(--warn)'; d.textContent = ev.note; turn.appendChild(d); }
-      const u = ev.usage || {};
-      if (u.completion_tokens || u.prompt_tokens) {
-        $('#st').textContent = '本轮 ' + (u.prompt_tokens || 0) + '+' + (u.completion_tokens || 0) + ' tokens'
-          + (ev.durationMs ? ' · ' + (ev.durationMs / 1000).toFixed(1) + 's' : '');
-      }
-      scroll();
-      break;
-    }
-    default: break;
-  }
-}
-
-$('#send').onclick = () => {
-  const t = $('#input').value;
-  const att = pendingAttachments.slice();
-  $('#input').value = '';
-  if (att.length) { pendingAttachments = []; $('#tongue').value = ''; $('#thumb').style.display = 'none'; $('#tongueTip').textContent = ''; }
-  send(t, att);
-};
-$('#stop').onclick = () => { try { ctrl?.abort(); } catch {} fetch('/api/abort', { method: 'POST' }).catch(() => {}); };
-$('#input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#send').click(); } });
-
-fetch('/api/state').then((r) => { $('#st').textContent = r.ok ? '内核已连接' : '内核异常 ' + r.status; }).catch(() => { $('#st').textContent = '内核不可达'; });
-
-// ── ?demo=1 离线预览 ─────────────────────────────────────────
-// 只做视觉验收：不调用 Dify、不发任何请求、不写任何数据。
-// 复用真实的 startThinking / paint / toolCard 与真实渲染器，所以看到的排版就是线上排版。
-const DEMO_ANSWER = [
-  '参考知识库中胃脘胀满相关论述。李四目前仅有「反复胃脘胀满一个月」，四诊信息不足，**暂不能确定证型，也不宜直接开方**。',
-  '',
-  '## 一、问诊要点（建议一次性补充）',
-  '',
-  '### 1. 胀满细节',
-  '- 部位：胃脘、上腹、胁下？是否连及胸胁？',
-  '- 性质：胀、痞、闷、痛？喜温喜按还是拒按？',
-  '- 与饮食：餐前 / 餐后加重？与情绪是否相关？',
-  '',
-  '### 2. 伴随症状',
-  '1. 嗳气、反酸、口苦、口干？',
-  '2. 纳食、二便、睡眠如何？',
-  '3. 有无体重下降、黑便、吞咽困难（报警症状）？',
-  '',
-  '> 若出现消瘦、黑便、进行性吞咽困难，需先排除器质性疾病，不可仅从脾胃论治。',
-  '',
-  '## 二、四诊要点',
-  '',
-  '| 四诊 | 重点 |',
-  '| --- | --- |',
-  '| 望 | 面色、舌质舌苔、舌下络脉 |',
-  '| 闻 | 嗳气声、口气 |',
-  '| 问 | 如上（寒热、汗、二便、饮食、胸腹、口渴、旧病） |',
-  '| 切 | 关脉沉 / 弦 / 滑，左右对比 |',
-  '',
-  '---',
-  '',
-  '**说明**：以上为问诊与辨证框架，待四诊信息补齐后再行四诊合参辨证论治。',
-].join('\n');
-
-const DEMO_THINK = [
-  '先辨虚实：胀满一月，尚未问清部位、性质、与饮食情绪的关系，不能先定证型。',
-  '知识库中胃脘胀满多从脾胃虚弱、肝郁脾虚、胆热乘胃、饮食停滞、脾胃虚寒、肝胃不和六路考虑。',
-  '关脉是关键：关沉多脾胃虚弱，关弦多肝郁气滞；本案女性 41 岁，还需问月经与情绪。',
-  '信息不足，不宜开方 —— 先给问诊要点，并列出报警症状，避免漏掉器质性疾病。',
-].join('\n');
-
-async function demo() {
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const turn = addTurn('（预览）李四，女，41岁，主诉：反复胃脘胀满一个月。请给出问诊与辨证。', false);
-  const body = turn.querySelector('.answer .body');
-  const th = startThinking(body);
-  const R = reasoningSink(turn);
-  const phases = ['模型推理中', '模型深度思考中', '模型深度思考中', '执行工具中'];
-  let k = 0;
-  const timer = setInterval(() => { if (k < phases.length) th.phase(phases[k++]); }, 1500);
-  await wait(4500);
-  clearInterval(timer);
-  const card = toolCard(turn, 'pack__tcm__patient_lookup');
-  const st = card.querySelector('.st');
-  st.className = 'st ok'; st.textContent = '✓ 38ms';
-  const pre = document.createElement('pre');
-  pre.textContent = '已定位患者 P002（李四，1985）· 本次为第 3 次就诊（三诊）';
-  card.appendChild(pre);
-  await wait(600);
-  // 思考过程（更小更淡、可折叠）先到，正文后到 —— 与真实链路顺序一致
-  th.phase('模型深度思考中');
-  for (let i = 0; i < DEMO_THINK.length; i += 6) { R.push(DEMO_THINK.slice(i, i + 6)); await wait(38); }
-  R.stop();
-  await wait(500);
-  th.stop();
-  body.innerHTML = '';
-  R.fold(); // 正文开始 → 思考过程自动收拢
-  for (let i = 0; i < DEMO_ANSWER.length; i += 18) { paint(body, DEMO_ANSWER.slice(0, i + 18), true); await wait(14); }
-  paint(body, DEMO_ANSWER, false);
-  scroll();
-}
-if (new URLSearchParams(location.search).has('demo')) demo();
-</script>
+<script type="module" src="/js/app.js"></script>
 </body>
 </html>

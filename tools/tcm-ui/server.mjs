@@ -12,12 +12,14 @@
 //   node tools/tcm-ui/server.mjs                       # 默认连 http://127.0.0.1:3821，本服务起 3830
 //   node tools/tcm-ui/server.mjs --target http://127.0.0.1:3820 --port 3831
 //   MINGDAO_UI_TOKEN=xxx node tools/tcm-ui/server.mjs  # 内核开了 token 时传给上游
+//   node tools/tcm-ui/server.mjs --home ~/.deyi-tcm    # 患者名册/历史要读的 MINGDAO_HOME
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { roster, patientDetail } from './tcm-data.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(HERE, 'public');
@@ -32,6 +34,8 @@ const argv = process.argv.slice(2);
 const TARGET = String(argOf(argv, 'target', process.env.MINGDAO_UI_TARGET || 'http://127.0.0.1:3821')).replace(/\/+$/, '');
 const PORT = Number(argOf(argv, 'port', process.env.MINGDAO_UI_PORT || '3830'));
 const TOKEN = String(process.env.MINGDAO_UI_TOKEN || '').trim();
+// 患者数据目录（读名册/历史用）。与内核同一个 MINGDAO_HOME —— 界面与内核读的必须是同一批文件。
+const HOME = String(argOf(argv, 'home', process.env.MINGDAO_UI_HOME || process.env.MINGDAO_HOME || '')).trim();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -65,8 +69,52 @@ function serveStatic(/** @type {any} */ req, /** @type {any} */ res) {
   });
 }
 
+/**
+ * 本地只读端点：`/api/tcm/*`
+ *
+ * 为什么代理要自己读数据：内核是**通用**的，不认识「患者」这种领域概念 ——
+ * 患者名册与历史是 Line B 的领域数据（`patients.json` / `intake/**`），内核没有对应 API。
+ * 代理与内核跑在同一台机器、同一个 MINGDAO_HOME 上，直接**只读**即可。
+ *
+ * ⚠ 这里**不重新定义**任何字段名、标签或读语义 —— 全部来自垂域 Pack（见 tcm-data.mjs）。
+ *   理由与复诊修复同源：同一份契约定义两处必然漂移。
+ */
+function json(/** @type {any} */ res, code, obj) {
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, must-revalidate',
+  });
+  res.end(JSON.stringify(obj));
+}
+
+function handleTcm(/** @type {any} */ req, /** @type {any} */ res) {
+  const u = new URL(req.url || '/', 'http://localhost');
+  if (!HOME) {
+    json(res, 500, { ok: false, error: '未配置数据目录：用 --home 或环境变量 MINGDAO_HOME / MINGDAO_UI_HOME 指定' });
+    return;
+  }
+  try {
+    if (u.pathname === '/api/tcm/patients') {
+      const r = roster(HOME);
+      json(res, r.ok ? 200 : 500, { ...r, home: HOME });
+      return;
+    }
+    const m = /^\/api\/tcm\/patients\/(.+)$/.exec(u.pathname);
+    if (m) {
+      const r = patientDetail(HOME, decodeURIComponent(m[1]));
+      json(res, r.ok ? 200 : 404, r);
+      return;
+    }
+    json(res, 404, { ok: false, error: '未知的 /api/tcm 路由' });
+  } catch (/** @type {any} */ e) {
+    json(res, 500, { ok: false, error: String(e?.message || e) });
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
+  // 代理自有的只读端点先处理，不转发给内核
+  if (url.startsWith('/api/tcm/')) { handleTcm(req, res); return; }
   if (!url.startsWith('/api/')) { serveStatic(req, res); return; }
 
   // —— 转发 /api/* 给内核，SSE 原样透传（绝不缓冲：缓冲会把流式问诊变成"等全部再显示"）——
@@ -118,5 +166,6 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('得一中医 UI（独立前端 + 薄代理）');
   console.log(`  界面      http://127.0.0.1:${PORT}`);
   console.log(`  内核      ${TARGET}${TOKEN ? '（已配置访问令牌）' : ''}`);
+  console.log(`  患者数据  ${HOME || '（未配置 —— 名册/历史不可用；用 --home 或 MINGDAO_HOME 指定）'}`);
   console.log('  说明：本服务只监听回环地址；内核不需要任何改动。');
 });

@@ -171,7 +171,7 @@ cmd_start() {
   if alive "$upid"; then
     say "界面已在运行（端口 $UI_PORT，pid $upid）"
   else
-    setsid nohup "$NODE_BIN" "$HERE/server.mjs" --target "http://127.0.0.1:$KERNEL_PORT" --port "$UI_PORT" \
+    setsid nohup "$NODE_BIN" "$HERE/server.mjs" --target "http://127.0.0.1:$KERNEL_PORT" --port "$UI_PORT" --home "$MINGDAO_HOME" \
       > "$RUN_DIR/ui.log" 2>&1 < /dev/null & echo $! > "$RUN_DIR/ui.pid"; disown 2>/dev/null || true
     if wait_http "http://127.0.0.1:$UI_PORT/" 15; then
       say "界面已启动（端口 $UI_PORT）"

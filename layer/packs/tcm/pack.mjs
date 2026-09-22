@@ -141,6 +141,85 @@ export function visitLabel(n) {
   return n <= 10 ? `${CN[n]}诊` : `第${n}诊`;
 }
 
+// ───────────────────── 数据访问（Pack 工具与问诊台共用）─────────────────────
+// 为什么这几支要导出：问诊台（tools/tcm-ui）的「患者名册 / 历史」必须在服务端读同一批
+// 文件。让它 import 这里的函数、而不是自己再写一份，是为了**读语义只有一个定义处**：
+//   · 注册表损坏时**大声失败**（绝不降级成空注册表 —— 会发重病历号）；
+//   · 快照按**文件名里的时间戳**排序、不用 mtime（同毫秒两次落盘 mtime 相同、顺序不定）；
+//   · 只认 `case-<epoch>.json` 命名，其余回落 mtime。
+// 这些语义被第二处抄错，就会出现「医师看到的就诊次数/顺序与落盘的不一致」——静默失真。
+// 与 FIELD_CN 收敛到一处是同一个道理（见该常量上方的说明）。
+
+/** 患者注册表路径 */
+export function registryFile(home) {
+  return path.join(String(home || ''), 'patients.json');
+}
+
+/** 病历快照根目录 */
+export function intakeRootDir(home) {
+  return path.join(String(home || ''), 'intake');
+}
+
+/**
+ * 读患者注册表。
+ *
+ * ⚠ 刻意**不**把「文件存在但读不出来」降级成空注册表。
+ * 空注册表会让 allocId 从 P001 重新发号，而 P001 的病历快照可能还躺在 intake/P001/ 里
+ * —— 结果是**两个不同患者共用一个病历号**，正是三条红线要防的串病历，
+ * 而且它静默发生（返回 ok:true，没有任何告警）。
+ * 损坏（断电半写、手工编辑出错、磁盘故障）时必须**大声失败**：
+ * 宁可拒绝服务，也不能发错号 —— 发错号是不可逆的，拒绝服务是可恢复的。
+ * 只有「文件根本不存在」（全新 home）才允许从 P001 开始。
+ */
+export function loadRegistryFrom(home) {
+  const p = registryFile(home);
+  if (!fs.existsSync(p)) return { nextId: 1, patients: {} };
+  let raw;
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch (e) {
+    throw new Error(`患者注册表无法读取（${p}）：${e?.message || e}。为避免病历号冲突/串病历，已停止操作——请先修复或从备份恢复该文件。`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`患者注册表 JSON 已损坏（${p}）：${e?.message || e}。为避免病历号冲突/串病历，已停止操作——请先修复或从备份恢复该文件。`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.patients || typeof parsed.patients !== 'object' || Array.isArray(parsed.patients)) {
+    throw new Error(`患者注册表结构不符（${p}）：期望形如 {"nextId":1,"patients":{}}。为避免病历号冲突/串病历，已停止操作。`);
+  }
+  return parsed;
+}
+
+/**
+ * 快照排序键：**文件名里的时间戳数值**。
+ * 刻意不用 mtime：同一毫秒内写入两份时 mtime 完全相同，排序结果不确定，
+ * 而 visit_compare 的「上次 vs 本次」直接依赖这个顺序（顺序错 = 对比表左右颠倒）。
+ * 非 `case-<epoch>.json` 命名的文件回落到 mtime，保证老数据仍可读。
+ */
+export function snapshotOrder(file) {
+  const m = /^case-(\d+)\.json$/.exec(path.basename(file));
+  if (m) return Number(m[1]);
+  try { return fs.statSync(file).mtimeMs; } catch { return 0; }
+}
+
+/** 某患者全部快照文件，**最新在前** */
+export function listSnapshotFiles(home, pid) {
+  const dir = path.join(intakeRootDir(home), pid);
+  try {
+    return fs.readdirSync(dir)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => path.join(dir, f))
+      .sort((a, b) => snapshotOrder(b) - snapshotOrder(a));
+  } catch { return []; }
+}
+
+/** 读一份快照；读不出来返回 null（调用方按「无此快照」处理） */
+export function readSnapshotFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
 // ─────────────────────────── Pack 入口 ───────────────────────────
 
 /**
@@ -151,8 +230,8 @@ export function createPack(ctx) {
   const packDir = String(ctx.packDir || '');
   const log = typeof ctx.log === 'function' ? ctx.log : () => {};
 
-  const registryPath = () => path.join(home, 'patients.json');
-  const intakeRoot = () => path.join(home, 'intake');
+  const registryPath = () => registryFile(home);
+  const intakeRoot = () => intakeRootDir(home);
 
   /** 原子写：先写同目录临时文件再 rename，避免崩溃时留下半截 JSON（患者数据不可半写） */
   function writeJsonAtomic(file, obj) {
@@ -162,36 +241,9 @@ export function createPack(ctx) {
     fs.renameSync(tmp, file);
   }
 
-  /**
-   * 读患者注册表。
-   *
-   * ⚠ 这里刻意**不**把「文件存在但读不出来」降级成空注册表。
-   * 空注册表会让 allocId 从 P001 重新发号，而 P001 的病历快照可能还躺在 intake/P001/ 里
-   * —— 结果是**两个不同患者共用一个病历号**，正是三条红线要防的串病历，
-   * 而且它静默发生（返回 ok:true，没有任何告警）。
-   * 损坏（断电半写、手工编辑出错、磁盘故障）时必须**大声失败**：
-   * 宁可拒绝服务，也不能发错号 —— 发错号是不可逆的，拒绝服务是可恢复的。
-   * 只有「文件根本不存在」（全新 home）才允许从 P001 开始。
-   */
+  /** 读患者注册表（语义见模块级 loadRegistryFrom：损坏一律大声失败） */
   function loadRegistry() {
-    const p = registryPath();
-    if (!fs.existsSync(p)) return { nextId: 1, patients: {} };
-    let raw;
-    try {
-      raw = fs.readFileSync(p, 'utf8');
-    } catch (e) {
-      throw new Error(`患者注册表无法读取（${p}）：${e?.message || e}。为避免病历号冲突/串病历，已停止操作——请先修复或从备份恢复该文件。`);
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      throw new Error(`患者注册表 JSON 已损坏（${p}）：${e?.message || e}。为避免病历号冲突/串病历，已停止操作——请先修复或从备份恢复该文件。`);
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.patients || typeof parsed.patients !== 'object' || Array.isArray(parsed.patients)) {
-      throw new Error(`患者注册表结构不符（${p}）：期望形如 {"nextId":1,"patients":{}}。为避免病历号冲突/串病历，已停止操作。`);
-    }
-    return parsed;
+    return loadRegistryFrom(home);
   }
 
   /**
@@ -223,30 +275,14 @@ export function createPack(ctx) {
     return id;
   }
 
-  /**
-   * 某患者全部快照，**最新在前**。
-   * 排序刻意按文件名里的时间戳数值，而不是 mtime：
-   * 同一毫秒内写入两份时 mtime 完全相同，排序结果不确定，而 visit_compare 的
-   * 「上次 vs 本次」直接依赖这个顺序 —— 顺序错 = 对比表左右颠倒 = 事实陈述出错。
-   * 非 `case-<epoch>.json` 命名的文件回落到 mtime，保证老数据仍可读。
-   */
-  function snapshotOrder(file) {
-    const m = /^case-(\d+)\.json$/.exec(path.basename(file));
-    if (m) return Number(m[1]);
-    try { return fs.statSync(file).mtimeMs; } catch { return 0; }
-  }
+  /** 某患者全部快照，**最新在前**（排序语义见模块级 listSnapshotFiles） */
   function listSnapshots(pid) {
-    const dir = path.join(intakeRoot(), pid);
-    try {
-      return fs.readdirSync(dir)
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => path.join(dir, f))
-        .sort((a, b) => snapshotOrder(b) - snapshotOrder(a));
-    } catch { return []; }
+    return listSnapshotFiles(home, pid);
   }
 
+  /** 读一份快照（读不出来返回 null，调用方按「无此快照」处理） */
   function readSnapshot(file) {
-    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+    return readSnapshotFile(file);
   }
 
   /** 落盘一份病历快照，返回文件路径 */
