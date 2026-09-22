@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 得一中医 · 问诊台 —— 开机自启安装/卸载
+# 明道中医 · 问诊台 —— 开机自启安装/卸载
 #
 #   bash tools/tcm-ui/install-autostart.sh            安装（优先 systemd --user，否则 XDG autostart）
 #   bash tools/tcm-ui/install-autostart.sh --uninstall 卸载
@@ -10,11 +10,11 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF="${DEYI_UI_CONF:-$HOME/.deyi-tcm-ui.conf}"
-UNIT_NAME="deyi-tcm-ui.service"
+CONF="${MINGDAO_UI_CONF:-$HOME/.mingdao-tcm-ui.conf}"
+UNIT_NAME="mingdao-tcm-ui.service"
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT_PATH="$UNIT_DIR/$UNIT_NAME"
-DESKTOP_PATH="$HOME/.config/autostart/deyi-tcm-ui.desktop"
+DESKTOP_PATH="$HOME/.config/autostart/mingdao-tcm-ui.desktop"
 LAUNCHER="$HERE/tcm-ui.sh"
 
 say() { printf '  %s\n' "$*"; }
@@ -51,14 +51,31 @@ cmd_status() {
   fi
 }
 
+# 品牌从「得一中医」改为「明道中医」时留过一次旧 unit/desktop。
+# 安装新的时候顺手把旧的清掉，否则机器上会同时存在两个自启项（都指向同一个启动脚本，
+# 表现是「明明改过名，systemctl 里还有一个 deyi」）。
+cleanup_legacy() {
+  local old_unit="$HOME/.config/systemd/user/deyi-tcm-ui.service"
+  local old_desktop="$HOME/.config/autostart/deyi-tcm-ui.desktop"
+  if [ -f "$old_unit" ]; then
+    systemctl --user disable --now deyi-tcm-ui.service >/dev/null 2>&1 || true
+    rm -f "$old_unit" && say "已清理旧自启项：deyi-tcm-ui.service"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
+  [ -f "$old_desktop" ] && rm -f "$old_desktop" && say "已清理旧自启项：deyi-tcm-ui.desktop"
+  return 0
+}
+
 cmd_install() {
   [ -f "$CONF" ] || die "还没有配置文件 —— 先跑一次：bash $LAUNCHER start（会生成 $CONF）"
+
+  cleanup_legacy
 
   if has_systemd_user; then
     mkdir -p "$UNIT_DIR"
     cat > "$UNIT_PATH" <<EOF
 [Unit]
-Description=得一中医 · 问诊台（内核 + 独立前端）
+Description=明道中医 · 问诊台（内核 + 独立前端）
 Documentation=file://$HERE/README.md
 After=network.target
 
@@ -92,7 +109,7 @@ EOF
     cat > "$DESKTOP_PATH" <<EOF
 [Desktop Entry]
 Type=Application
-Name=得一中医 · 问诊台
+Name=明道中医 · 问诊台
 Comment=启动本机 MDH 内核与独立问诊界面
 Exec=/usr/bin/env bash $LAUNCHER start
 Icon=utilities-terminal

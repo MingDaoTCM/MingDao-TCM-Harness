@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 得一中医 · 问诊台 —— 一键启停
+# 明道中医 · 问诊台 —— 一键启停
 #
 #   bash tools/tcm-ui/tcm-ui.sh start     启动内核 + 界面（已在跑就跳过）
 #   bash tools/tcm-ui/tcm-ui.sh stop      停止两者
@@ -7,13 +7,18 @@
 #   bash tools/tcm-ui/tcm-ui.sh status    看状态与地址
 #   bash tools/tcm-ui/tcm-ui.sh logs      跟踪日志（Ctrl+C 退出）
 #
-# 配置写在 ~/.deyi-tcm-ui.conf（首次运行本脚本会自动生成模板）。
+# 配置写在 ~/.mingdao-tcm-ui.conf（首次运行本脚本会自动生成模板）。
 # 想开机自启：bash tools/tcm-ui/install-autostart.sh
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF="${DEYI_UI_CONF:-$HOME/.deyi-tcm-ui.conf}"
-RUN_DIR="${DEYI_UI_RUN_DIR:-$HOME/.deyi-tcm-ui}"
+CONF="${MINGDAO_UI_CONF:-$HOME/.mingdao-tcm-ui.conf}"
+RUN_DIR="${MINGDAO_UI_RUN_DIR:-$HOME/.mingdao-tcm-ui}"
+
+# 品牌从「得一中医」改为「明道中医」时做过一次改名：把旧配置/日志目录**就地迁移**，
+# 否则新默认值会让老配置被无视、界面按自动发现重新猜参数。
+if [ ! -f "$CONF" ] && [ -f "$HOME/.deyi-tcm-ui.conf" ]; then mv "$HOME/.deyi-tcm-ui.conf" "$CONF"; fi
+if [ ! -d "$RUN_DIR" ] && [ -d "$HOME/.deyi-tcm-ui" ]; then mv "$HOME/.deyi-tcm-ui" "$RUN_DIR"; fi
 mkdir -p "$RUN_DIR"
 
 # ── 默认值（可被 conf 覆盖） ────────────────────────────────
@@ -52,7 +57,7 @@ if [ -z "$MINGDAO_KERNEL" ] || [ ! -f "$MINGDAO_KERNEL/src/cli.js" ]; then
   MINGDAO_KERNEL="$(discover_kernel || true)"
 fi
 if [ -z "$MINGDAO_HOME" ]; then
-  for h in "$HOME/.mingdao-dify-test" "$HOME/.deyi-tcm" "$HOME/.mingdao"; do
+  for h in "$HOME/.mingdao-dify-test" "$HOME/.mingdao-tcm" "$HOME/.mingdao"; do
     [ -f "$h/credentials.json" ] && { MINGDAO_HOME="$h"; break; }
   done
 fi
@@ -60,7 +65,7 @@ fi
 write_conf_template() {
   [ -f "$CONF" ] && return 0
   cat > "$CONF" <<EOF
-# 得一中医 · 问诊台配置（本文件由 tcm-ui.sh 首次运行生成，可手工编辑）
+# 明道中医 · 问诊台配置（本文件由 tcm-ui.sh 首次运行生成，可手工编辑）
 MINGDAO_KERNEL="$MINGDAO_KERNEL"
 MINGDAO_HOME="$MINGDAO_HOME"
 KERNEL_PORT=$KERNEL_PORT
@@ -132,7 +137,7 @@ wait_http() {
 # ── start / stop ───────────────────────────────────────────
 cmd_start() {
   [ -n "$MINGDAO_KERNEL" ] && [ -f "$MINGDAO_KERNEL/src/cli.js" ] || die "找不到 MingDao-Harness 内核检出；请在 $CONF 里设置 MINGDAO_KERNEL"
-  [ -n "$MINGDAO_HOME" ] && [ -d "$MINGDAO_HOME" ] || die "找不到 MINGDAO_HOME；请在 $CONF 里设置（例：\$HOME/.deyi-tcm）"
+  [ -n "$MINGDAO_HOME" ] && [ -d "$MINGDAO_HOME" ] || die "找不到 MINGDAO_HOME；请在 $CONF 里设置（例：\$HOME/.mingdao-tcm）"
 
   NODE_BIN="$(pick_node || true)"
   [ -n "$NODE_BIN" ] || die "找不到一个 fetch 可用的 node。请在 $CONF 里显式指定，例：NODE_BIN=\"$HOME/.local/node-v24.19.0-linux-x64/bin/node\""
@@ -219,6 +224,22 @@ cmd_status() {
   say "数据目录： ${MINGDAO_HOME:-（未配置）}"
   say "配置：     $CONF"
   say "日志目录： $RUN_DIR"
+
+  # ── 陈旧进程检测 ──────────────────────────────────────────────
+  # 症状很坑：只改代码不重启，进程照旧跑旧逻辑 —— 界面表现为「读取失败：Not found」
+  # （旧代理会把 /api/tcm/* 转发给内核），完全看不出原因。2026-09-22 实际踩过一次。
+  # 判据：源码最新修改时间 > 进程启动时间（Linux 用 /proc/<pid> 的 mtime 作为启动时间）。
+  local upid started newest
+  upid="$(pid_on_port "$UI_PORT" || true)"
+  if alive "$upid" && [ -d "/proc/$upid" ]; then
+    started="$(stat -c %Y "/proc/$upid" 2>/dev/null || echo 0)"
+    newest="$(find "$HERE" -type f \( -name '*.mjs' -o -name '*.js' -o -name '*.css' -o -name '*.html' \) -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1)"
+    if [ -n "${newest:-}" ] && [ "${newest:-0}" -gt "${started:-0}" ] 2>/dev/null; then
+      echo
+      say "⚠ 界面跑的是**旧代码**（源码比进程新）—— 现在打开页面会读到旧接口。"
+      say "  修复：bash tools/tcm-ui/tcm-ui.sh restart"
+    fi
+  fi
 }
 
 cmd_logs() {

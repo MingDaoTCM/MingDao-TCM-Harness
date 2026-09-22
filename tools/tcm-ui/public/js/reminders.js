@@ -7,7 +7,7 @@
 // 为什么只在「新增」时通知：否则每次轮询都会重复轰炸同一位患者。
 // 首次拉取只建立**基线**（不通知），避免一打开页面就弹一堆。
 import { $, esc } from './util.js';
-import { getJSON } from './api.js';
+import { getJSON, staleProxyHint } from './api.js';
 
 const POLL_MS = 60_000;
 const NOTIF_KEY = 'tcm-notify-on';
@@ -44,7 +44,7 @@ function notifyNewlyOverdue(list) {
   if (!canNotify() || !list.length) return;
   const names = list.slice(0, 3).map((p) => p.name || p.id).join('、');
   try {
-    new Notification('得一中医 · 随访提醒', {
+    new Notification('明道中医 · 随访提醒', {
       body: `${list.length} 位患者超期未复诊：${names}${list.length > 3 ? ' 等' : ''}`,
       tag: 'tcm-followup', // 同 tag 会替换而不是堆叠
     });
@@ -58,7 +58,7 @@ export async function refreshReminders() {
     // 读不出来（例如注册表损坏）→ 明确显示，绝不假装「没有提醒」
     const bar = $('#remindBar');
     bar.hidden = false;
-    $('#remindText').innerHTML = '<b>随访提醒读取失败</b>：' + esc(r.error || '未知错误');
+    $('#remindText').innerHTML = '<b>随访提醒读取失败</b>：' + esc(r.error || '未知错误') + esc(staleProxyHint(r));
     return r;
   }
   lastCounts = r.counts || lastCounts;

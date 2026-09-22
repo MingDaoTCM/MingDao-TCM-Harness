@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 得一中医 UI —— 薄代理 + 静态服务（零依赖，只用 node:内置模块）
+// 明道中医 UI —— 薄代理 + 静态服务（零依赖，只用 node:内置模块）
 //
 // 为什么需要它：内核（MingDao-Harness）已经是一个契约清晰的 headless 后端
 // （`src/web/server.js` 头部写明了路由与 SSE 事件表）。我们要自己的问诊界面，
@@ -12,7 +12,7 @@
 //   node tools/tcm-ui/server.mjs                       # 默认连 http://127.0.0.1:3821，本服务起 3830
 //   node tools/tcm-ui/server.mjs --target http://127.0.0.1:3820 --port 3831
 //   MINGDAO_UI_TOKEN=xxx node tools/tcm-ui/server.mjs  # 内核开了 token 时传给上游
-//   node tools/tcm-ui/server.mjs --home ~/.deyi-tcm    # 患者名册/历史要读的 MINGDAO_HOME
+//   node tools/tcm-ui/server.mjs --home ~/.mingdao-tcm    # 患者名册/历史要读的 MINGDAO_HOME
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -169,7 +169,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log('得一中医 UI（独立前端 + 薄代理）');
+  console.log('明道中医 UI（独立前端 + 薄代理）');
   console.log(`  界面      http://127.0.0.1:${PORT}`);
   console.log(`  内核      ${TARGET}${TOKEN ? '（已配置访问令牌）' : ''}`);
   console.log(`  患者数据  ${HOME || '（未配置 —— 名册/历史不可用；用 --home 或 MINGDAO_HOME 指定）'}`);

@@ -24,6 +24,20 @@ export function postJSON(url, body, signal) {
 }
 
 /**
+ * 「代理是不是旧版本」的可操作提示。
+ *
+ * 特征很具体：`/api/tcm/*` 在**旧代理**里会被当成普通 `/api/*` 转发给内核，而内核没有这些路由，
+ * 于是回 `{"error":"Not found"}`（新代理绝不会回这个形状 —— 它回 `{ok:false,error:'未知的 /api/tcm 路由'}`）。
+ * 症状在界面上只是「读取失败：Not found」，完全看不出原因 —— 2026-09-22 实际踩过一次。
+ * 这里把**原因和动作**一起说出来。
+ * @param {any} r getJSON 的返回
+ */
+export function staleProxyHint(r) {
+  const stale = r && r.ok !== true && /not\s*found/i.test(String(r.error || ''));
+  return stale ? '（问诊台代理可能还是旧版本 —— 改过代码后需重启：bash tools/tcm-ui/tcm-ui.sh restart）' : '';
+}
+
+/**
  * 读 SSE：按空行分块，逐条 `data: <json>` 交给 onEvent（**不缓冲**，逐块到达）。
  * 抽出来是因为问诊链路对"逐字到达"敏感：任何缓冲都会把流式问诊变成"等全部再显示"。
  */

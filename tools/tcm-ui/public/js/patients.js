@@ -7,7 +7,7 @@
 //   都由服务端按 Pack 的口径算好下发（含「复诊草稿」）。理由与复诊修复同源：
 //   同一份契约定义两处必然漂移。
 import { $, esc, relDays } from './util.js';
-import { getJSON } from './api.js';
+import { getJSON, staleProxyHint } from './api.js';
 
 /** app.js 注入：切到问诊页并预填一段文本 */
 let onFollowup = () => {};
@@ -73,7 +73,7 @@ export async function refreshRoster() {
   if (!data.ok) {
     // 注册表损坏时服务端会明确报错 —— 绝不显示成「0 位患者」（那会让人以为数据没了）
     sum.textContent = '读取失败';
-    list.innerHTML = '<div class="perr" style="margin:12px">' + esc(data.error || '未知错误') + '</div>';
+    list.innerHTML = '<div class="perr" style="margin:12px">' + esc(data.error || '未知错误') + esc(staleProxyHint(data)) + '</div>';
     return false;
   }
   allPatients = data.patients || [];

@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# 得一中医层安装脚本：把本仓库的中医扩展装进一个 MINGDAO_HOME。
-# 用法：MINGDAO_HOME=~/.deyi-tcm bash install.sh
-#      （不指定 MINGDAO_HOME 时默认 ~/.deyi-tcm）
+# 明道中医层安装脚本：把本仓库的中医扩展装进一个 MINGDAO_HOME。
+# 用法：MINGDAO_HOME=~/.mingdao-tcm bash install.sh
+#      （不指定 MINGDAO_HOME 时默认 ~/.mingdao-tcm）
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOME_DIR="${MINGDAO_HOME:-$HOME/.deyi-tcm}"
+HOME_DIR="${MINGDAO_HOME:-$HOME/.mingdao-tcm}"
 
-echo "== 得一中医层安装 =="
+echo "== 明道中医层安装 =="
 echo "   目标 MINGDAO_HOME: $HOME_DIR"
+
+# 品牌从「得一中医」改为「明道中医」，默认 MINGDAO_HOME 也随之从 ~/.deyi-tcm 改成 ~/.mingdao-tcm。
+# 若你之前用的是旧默认目录，这里只**提示**、不自动迁移 —— 那里面有患者数据（patients.json /
+# intake/），自动搬动出错的代价远大于手动搬一次。
+if [ "$HOME_DIR" = "$HOME/.mingdao-tcm" ] && [ -d "$HOME/.deyi-tcm" ] && [ ! -d "$HOME/.mingdao-tcm" ]; then
+  echo
+  echo "   ⚠ 检测到旧目录 ~/.deyi-tcm（含患者数据）。默认目录已改为 ~/.mingdao-tcm。"
+  echo "     要沿用旧数据，请显式指定：MINGDAO_HOME=~/.deyi-tcm bash install.sh"
+  echo "     要迁到新默认：mv ~/.deyi-tcm ~/.mingdao-tcm   （或 cp -a 后确认无误再删）"
+  echo
+fi
 
 # 1) 目录
 mkdir -p "$HOME_DIR/providers" "$HOME_DIR/presets" "$HOME_DIR/packs"

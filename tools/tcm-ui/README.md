@@ -1,4 +1,4 @@
-# 得一中医 · 问诊台（独立前端 + 薄代理）
+# 明道中医 · 问诊台（独立前端 + 薄代理）
 
 **样品**：证明"自建 UI + 内核零改动"这条路走得通。
 
@@ -34,11 +34,11 @@ bash tools/tcm-ui/tcm-ui.sh restart    # 重启
 bash tools/tcm-ui/tcm-ui.sh logs       # 跟踪日志（Ctrl+C 退出）
 ```
 
-首次运行会生成配置 `~/.deyi-tcm-ui.conf`（内核目录 / MINGDAO_HOME / 端口），可手工改：
+首次运行会生成配置 `~/.mingdao-tcm-ui.conf`（内核目录 / MINGDAO_HOME / 端口），可手工改：
 
 ```bash
 MINGDAO_KERNEL="/path/to/MingDao-Harness"   # 自动发现时会**按 package.json 版本挑最新的**
-MINGDAO_HOME="/home/you/.deyi-tcm"
+MINGDAO_HOME="/home/you/.mingdao-tcm"
 KERNEL_PORT=3821
 UI_PORT=3830
 NODE_BIN=""     # 留空=每次启动自动挑一个 fetch 真的能用的 node；选中后会写回本文件
@@ -62,7 +62,7 @@ NODE_BIN=""     # 留空=每次启动自动挑一个 fetch 真的能用的 node�
 > **为什么发现要按版本挑**：机器上常同时存在旧克隆与新快照（实测：`MingDao-Harness`
 > 是 v0.4.5，`MingDao-Harness-v0.6.3` 才是当前上游）。按目录名的字典序会挑错。
 >
-> 日志与 pid 落在 `~/.deyi-tcm-ui/`。
+> 日志与 pid 落在 `~/.mingdao-tcm-ui/`。
 
 ## 开机自启
 
@@ -76,9 +76,9 @@ bash tools/tcm-ui/install-autostart.sh --uninstall
 没有 systemd --user 的环境回落到 XDG autostart（登录时拉起一次，不自动重启）。
 
 ```bash
-systemctl --user status  deyi-tcm-ui.service
-systemctl --user restart deyi-tcm-ui.service
-systemctl --user disable --now deyi-tcm-ui.service   # 关掉自启
+systemctl --user status  mingdao-tcm-ui.service
+systemctl --user restart mingdao-tcm-ui.service
+systemctl --user disable --now mingdao-tcm-ui.service   # 关掉自启
 ```
 
 > 两点须知：
@@ -92,9 +92,9 @@ systemctl --user disable --now deyi-tcm-ui.service   # 关掉自启
 
 ```bash
 # 内核（MingDao-Harness 检出目录下）
-MINGDAO_HOME=~/.deyi-tcm node src/cli.js web 3821
+MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 # 薄代理（本仓库目录下）—— --home 指同一个 MINGDAO_HOME，否则「患者」页读不到数据
-node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830 --home ~/.deyi-tcm
+node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830 --home ~/.mingdao-tcm
 ```
 
 </details>

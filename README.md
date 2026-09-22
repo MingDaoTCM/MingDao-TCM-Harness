@@ -1,4 +1,4 @@
-# 得一中医 Harness（Deyi TCM Harness）
+# 明道中医 Harness（MingDao TCM Harness）
 
 > 中医垂域智能体外层。**下游（Line B）**，依赖上游通用内核 **[MingDao-Harness](../MingDao-Harness)**（Line A）。
 
@@ -13,7 +13,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  得一中医层（本仓库 · 装进 MINGDAO_HOME）                        │
+│  明道中医层（本仓库 · 装进 MINGDAO_HOME）                        │
 │  · Dify 主问诊 Provider（providers/dify.mjs）                  │
 │  · 病历号患者系统（patients.json + intake/<病历号>/）            │
 │  · 工具一 问诊采集（多轮追问 + 缺项不编造 + 落盘）               │
@@ -62,13 +62,13 @@
 git clone <MingDao-Harness 地址> && cd MingDao-Harness
 
 # 2. 安装中医层到指定 MINGDAO_HOME
-MINGDAO_HOME=~/.deyi-tcm bash ../Deyi-TCM-Harness/install.sh
+MINGDAO_HOME=~/.mingdao-tcm bash ../Deyi-TCM-Harness/install.sh
 
 # 3. 填入密钥（Dify App API Key + DeepSeek Key）
 #    方式见 install.sh 输出，或手工编辑 $MINGDAO_HOME/credentials.json
 
 # 4. 启动
-MINGDAO_HOME=~/.deyi-tcm node src/cli.js web 3821
+MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 ```
 
 ## 命令（WebUI / CLI 对话中输入）
