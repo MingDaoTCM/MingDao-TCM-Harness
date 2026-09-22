@@ -1,0 +1,20 @@
+{
+  "name": "mingdao-tcm-desktop",
+  "version": "0.1.0",
+  "description": "明道中医 · 问诊台 桌面版（Electron 外壳）",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "MINGDAO_TCM_DESKTOP_SMOKE=1 electron .",
+    "dist:dir": "electron-builder --dir",
+    "dist:linux": "electron-builder --linux AppImage deb",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}

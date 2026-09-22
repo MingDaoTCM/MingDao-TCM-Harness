@@ -1,0 +1,81 @@
+# 明道中医 · 问诊台 桌面版 —— 打包配置
+#
+# 与内核自带 desktop/electron-builder.yml 同源（同品牌、同镜像、同产物形态），差别只有一处：
+# 这里**要多带一份问诊台**（薄代理 + 前端），并把内核的 src 一起内置，做到"一次安装、双击可用"。
+#
+# 目录布局（关键）：extraResources 落盘后必须保持**相对结构**，因为 tcm-data.mjs 里有一句
+# `../../layer/packs/tcm/pack.mjs` —— 所以把仓库里的 layer/ 与 tools/tcm-ui/ 按原样放进
+# resources/app/，内核放进 resources/kernel/。
+#   resources/app/layer/packs/tcm/**            ← 垂域 Pack（问诊台数据层 import 它）
+#   resources/app/tools/tcm-ui/**               ← server.mjs / tcm-data.mjs / public/**
+#   resources/kernel/src/**                     ← 内核（零运行时依赖）
+# 运行期由 orchestrator.resolveAppRoot()/resolveKernelRoot() 解析到这两处。
+appId: com.mingdao.tcm
+productName: MingDao TCM
+copyright: © 2026 MingDaoTCM
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - main.js
+  - orchestrator.mjs
+  - package.json
+  - build/icon.png
+  - build/tray.png
+
+extraResources:
+  # 问诊台 + 垂域 Pack：保持仓库内的相对布局（见文件头的说明）
+  - from: ../../..
+    to: app
+    filter:
+      - layer/packs/tcm/**
+      - tools/tcm-ui/server.mjs
+      - tools/tcm-ui/tcm-data.mjs
+      - tools/tcm-ui/public/**
+  # 内核：默认取工作区同级的 MingDao-Harness（改布局就改这一行，或改用下面的 ${env.*}）
+  - from: ../../../../MingDao-Harness/src
+    to: kernel/src
+  # 若内核不在默认位置，可改用环境变量（electron-builder 支持 ${env.X}）：
+  # - from: ${env.MINGDAO_KERNEL}/src
+  #   to: kernel/src
+
+asar: true
+npmRebuild: false
+
+# 国内下载 electron 走镜像（与内核 desktop/ 一致，否则打包会卡在下载）
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
+
+linux:
+  executableName: mingdao-tcm
+  target:
+    - AppImage
+    - deb
+  icon: build/icons
+  category: Utility
+  maintainer: MingDaoTCM
+  artifactName: mingdao-tcm-${version}-${arch}.${ext}
+
+win:
+  target:
+    - nsis
+  icon: build/icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: MingDao TCM
+  artifactName: mingdao-tcm-setup-${version}-${arch}.${ext}
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.medical
+  icon: build/icon.png
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+dmg:
+  artifactName: mingdao-tcm-${version}-${arch}.${ext}

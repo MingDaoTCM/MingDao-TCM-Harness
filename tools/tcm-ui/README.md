@@ -183,15 +183,16 @@ node tools/tcm-ui/server.mjs --target http://127.0.0.1:3821 --port 3830 --home ~
    链路是：内核把图片发成多模态消息 → `dify.mjs` 上传到 Dify（`/v1/files/upload`）
    → 随 query 一起提交。**前提是 Dify 应用侧也开了视觉**。
    照片传不上去不会挡住问诊（正文照常，只是这次没有图片）。
-3. **不是桌面版** —— 这里只交"独立前端 + 薄代理"这一层。打包成 Electron 桌面应用
-   （自带内核、一次安装、摄像头权限、自动更新）是下一层，照抄内核 `desktop/` 的
-   `main.js` + `electron-builder.yml` 即可。
+3. **桌面版已起步** —— 见 [`desktop/`](desktop/README.md)：Electron 外壳 + 自带内核与前端，
+   一次安装、双击可用、不需要终端。⚠ 但它的 **Electron 层没在开发机验证过**（这台机器没有
+   X server，Electron 连平台初始化都过不去）；已验证的是编排层端到端 + 壳的静态完整性。
 
 ## 测试
 
 ```bash
-node tools/tcm-ui/test/tcm-data.test.mjs    # 数据层：名册排序 / 时间线方向 / 逐项变化 / 提醒集 / fail-loud（14 项）
-node tools/tcm-ui/test/ui-wiring.test.mjs   # 接线：静态资源 / DOM id / 模块导出 / 前端零字段知识（7 项）
+node tools/tcm-ui/test/tcm-data.test.mjs             # 数据层：名册排序 / 时间线 / 逐项变化 / 提醒集 / fail-loud（14 项）
+node tools/tcm-ui/test/ui-wiring.test.mjs            # 接线：静态资源 / DOM id / 模块导出 / 前端零字段知识（7 项）
+node tools/tcm-ui/test/desktop-orchestrator.test.mjs # 桌面版编排：真起内核+代理 / 打包布局 / 壳的完整性（14 项）
 ```
 
 **没有无头浏览器可用**，所以「页面真的能跑」仍需人工验收（打开 `?demo=1` 看排版）。
@@ -204,8 +205,9 @@ node tools/tcm-ui/test/ui-wiring.test.mjs   # 接线：静态资源 / DOM id / �
 |---|---|
 | `tcm-ui.sh` | 一键启停（start/stop/restart/status/logs）；幂等，端口健康检查，按版本发现内核 |
 | `install-autostart.sh` | 开机自启安装/卸载/查状态（systemd --user 优先，XDG autostart 兜底） |
-| `server.mjs` | 薄代理 + 静态服务（零依赖，`node:http`）：转发 `/api/*` 给内核（SSE 不缓冲）+ 自有只读端点 `/api/tcm/*` |
+| `server.mjs` | 薄代理 + 静态服务（零依赖，`node:http`）：转发 `/api/*` 给内核（SSE 不缓冲）+ 自有只读端点 `/api/tcm/*`。**也可作模块用**（`startUiServer()`，桌面版靠它同进程起服务） |
 | `tcm-data.mjs` | 名册/历史的数据层；**不自己定义字段**，全部 import 自垂域 Pack |
+| `desktop/` | Electron 桌面版：`orchestrator.mjs`（纯 Node，可测）+ `main.js`（薄壳）+ 打包配置，见其 [README](desktop/README.md) |
 | `public/index.html` | 外壳：视图容器 + 问诊表单 HTML（无构建步骤） |
 | `public/app.css` | 全部样式（含问诊 / 患者两套） |
 | `public/js/util.js` | `$` / HTML 转义 / Markdown 轻渲染（镜像内核 `src/web/util.js`，另支持表格）/ `<think>` 兜底过滤 |
