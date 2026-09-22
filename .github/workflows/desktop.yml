@@ -109,6 +109,8 @@ jobs:
         run: |
           cd tcm/tools/tcm-ui/desktop
           test -x dist/linux-unpacked/mingdao-tcm || { echo "缺少 dist/linux-unpacked/mingdao-tcm"; ls -la dist; exit 1; }
+          # 内核首启会在 MINGDAO_HOME 建最小配置 —— 目录得先存在，否则它写不进去
+          mkdir -p "$MINGDAO_HOME"
           xvfb-run -a dist/linux-unpacked/mingdao-tcm --no-sandbox
 
       - name: 上传工件
