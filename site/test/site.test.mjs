@@ -251,18 +251,21 @@ await testAsync('当前密码不对 → 401；新密码太短 → 400', async ()
 });
 
 console.log('\n[4] 页面观感（能失败的那部分）');
-// ★ 用户实测反馈：「网站下载桌面版 linux 的 AppImage 那个**没有背景颜色**」。
-//   原因是每张卡第 2 个文件走 .dbtn.sec，而它当时是 background:transparent ——
-//   在深色卡上等于没有底色，看着像禁用。Linux 卡顺序是 deb、AppImage，正好 AppImage 中招。
-//   这条把"按钮必须有可见底色"钉住，避免以后又被改回透明。
-await testAsync('★ 下载按钮不许没有底色（次级也要看得出是按钮）', () => {
+// ★ 用户实测反馈：「网站下载桌面版 linux 的 AppImage 那个**没有背景颜色**」，
+//   随后明确要求：**跟其他安装包统一、别搞特殊**。
+//   根因是每张卡第 2 个文件走 .dbtn.sec（当时是 background:transparent）——
+//   同一片下载区出现两种按钮，Linux 卡的 AppImage 因此看着像禁用。
+//   修法是**删掉整套次级样式**，所有安装包按钮一种样式。下面把这点钉住。
+await testAsync('★ 下载按钮统一样式：不许有次级/特殊样式，也不许按序号切换', () => {
   const html = fs.readFileSync(path.join(SITE, 'public', 'index.html'), 'utf8');
-  const m = /\.dbtn\.sec\s*\{([^}]*)\}/.exec(html);
-  assert.ok(m, '首页应定义 .dbtn.sec（一张卡里第二个文件的样式）');
-  assert.ok(!/background\s*:\s*transparent/i.test(m[1]), '.dbtn.sec 不能是透明底');
-  assert.match(m[1], /background\s*:\s*rgba?\(/i, '.dbtn.sec 必须有可见底色');
-  // 模板确实会给第 2 个文件加 sec —— 否则这条样式根本用不上，等于白测
-  assert.ok(/class="dbtn\$\{i \? ' sec' : ''\}"/.test(html), '下载卡模板应给第 2 个文件加 sec 类');
+  assert.ok(!/\.dbtn\.sec/.test(html), '不应存在 .dbtn.sec 之类的次级样式');
+  assert.ok(!/class="dbtn\$\{/.test(html), '按钮模板不得按序号/条件切换 class');
+  assert.match(html, /class="dbtn" href="\/downloads\//, '按钮模板应固定为同一种 class');
+  // 主按钮样式必须是可见底色（防止有人把它也改成透明）
+  const m = /\.dbtn\s*\{([^}]*)\}/.exec(html);
+  assert.ok(m, '应有 .dbtn 样式');
+  assert.match(m[1], /background\s*:\s*(linear-gradient|rgba?)\(/i, '.dbtn 必须有可见底色');
+  assert.ok(!/background\s*:\s*transparent/i.test(m[1]), '.dbtn 不能是透明底');
 });
 
 console.log('\n[5] 在线爆破限速');

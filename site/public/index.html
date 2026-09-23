@@ -57,11 +57,8 @@
   .dbtn{display:block;text-align:center;background:linear-gradient(135deg,var(--jade2),#0b6e8f);color:#04120f;font-weight:700;
         border-radius:9px;padding:11px 14px;font-size:14px}
   .dbtn:hover{filter:brightness(1.08)}
-  /* 一张卡里第二个文件（Linux 卡的 AppImage、mac 卡的第二个包）走次级样式。
-     早先这里是 background:transparent —— 在深色卡上等于**没有底色**，看着像禁用按钮
-     （用户实测反馈：AppImage 那个"没有背景颜色"）。次级也要有底色，只是弱一点。 */
-  .dbtn.sec{background:rgba(20,184,166,.13);border:1px solid rgba(20,184,166,.45);color:var(--jade);font-weight:600}
-  .dbtn.sec:hover{background:rgba(20,184,166,.20);filter:none}
+  /* 只有一个 .dbtn 样式：所有安装包按钮长得一模一样（曾经有过 .sec 次级样式，
+     导致 Linux 卡的 AppImage 看着"没有底色"、像个禁用按钮 —— 已删掉，不再搞特殊）。 */
   .dl .note{font-size:12.5px;color:var(--faint);margin:0}
   .dl code{background:var(--code);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:11px;color:var(--dim);word-break:break-all}
   .empty{color:var(--faint);font-size:14px;padding:18px;border:1px dashed var(--border);border-radius:12px;text-align:center}
@@ -198,8 +195,11 @@ const GROUPS = [
 ];
 
 function card(g, files) {
-  const btns = files.map((f, i) =>
-    `<a class="dbtn${i ? ' sec' : ''}" href="/downloads/${encodeURIComponent(f.name)}">⬇ ${f.name.replace(/^mingdao-tcm(-setup)?-/, '').replace(/^MingDao\.TCM-/, '')} · ${fmtSize(f.size)}</a>`
+  // 所有安装包按钮**同一种样式**：不给某个平台或某个文件搞特殊。
+  // 早先按序号给第 2 个文件加 .sec（次级、透明底），Linux 卡的 AppImage 因此看着"没有底色"
+  // —— 同一个下载区里出现两种按钮，反而让人以为那个不能点。
+  const btns = files.map((f) =>
+    `<a class="dbtn" href="/downloads/${encodeURIComponent(f.name)}">⬇ ${f.name.replace(/^mingdao-tcm(-setup)?-/, '').replace(/^MingDao\.TCM-/, '')} · ${fmtSize(f.size)}</a>`
   ).join('');
   const shas = files.map((f) => f.sha256
     ? `<p class="note">sha256 <code>${f.sha256}</code></p>` : '').join('');
