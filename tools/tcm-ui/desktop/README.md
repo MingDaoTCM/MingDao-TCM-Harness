@@ -72,6 +72,28 @@ git tag -a v0.1.0 -m "明道中医 · 问诊台 桌面版 v0.1.0" && git push gi
 - **只上传工件、不发版**的干跑：Actions → Desktop → Run workflow（`workflow_dispatch`）；
 - 发版只认 tag（`publish` 作业有 `if: startsWith(github.ref, 'refs/tags/')`），干跑绝不会误建 Release。
 
+## 数据目录（患者数据放哪）
+
+桌面版**以内核的解析结果为准**，界面复用同一个值 —— 优先级：
+
+| 顺序 | 来源 | 说明 |
+|---|---|---|
+| 1 | `MINGDAO_HOME` 环境变量 | 最显式：`MINGDAO_HOME=~/.mingdao-tcm npm start` |
+| 2 | `~/.mingdao-tcm-desktop.json` → `{ "home": "…" }` | **给 GUI 用的**：双击启动的窗口应用设不了环境变量 |
+| 3 | 内核默认 | `~/.mingdao`（内核 `src/config.js` 的 `mingdaoHome()`）|
+
+> ⚠ 第 3 档是 2026-09-23 一个真实缺陷的修法：桌面版原先**没把数据目录传给界面**，
+> 而窗口应用里 `MINGDAO_HOME` 是空的 —— 于是内核读 `~/.mingdao`、界面拿到空串，
+> 直接报「随访提醒读取失败：未配置数据目录」。命令行下恰好不出现（启动脚本会设环境变量），
+> 所以本机跑一万遍也不会红，是装上桌面版才照出来的。现在有一条断言专门钉这个组合
+> （`HOME=临时目录` + `MINGDAO_HOME` 未设 = 桌面版的真实情况）。
+
+**想让桌面版用你已有的数据**（例如命令行那边一直在用的目录）：
+
+```bash
+echo '{ "home": "/home/you/.mingdao-tcm" }' > ~/.mingdao-tcm-desktop.json
+```
+
 ### macOS 签名 / 公证（需要你在仓库里配 Secrets）
 
 上游用的是这 5 个（**本仓库目前一个都没配，所以现在的产物是未签名的**）：
