@@ -250,7 +250,22 @@ await testAsync('当前密码不对 → 401；新密码太短 → 400', async ()
   assert.equal(short.status, 400, '太短的新密码应被拒');
 });
 
-console.log('\n[4] 在线爆破限速');
+console.log('\n[4] 页面观感（能失败的那部分）');
+// ★ 用户实测反馈：「网站下载桌面版 linux 的 AppImage 那个**没有背景颜色**」。
+//   原因是每张卡第 2 个文件走 .dbtn.sec，而它当时是 background:transparent ——
+//   在深色卡上等于没有底色，看着像禁用。Linux 卡顺序是 deb、AppImage，正好 AppImage 中招。
+//   这条把"按钮必须有可见底色"钉住，避免以后又被改回透明。
+await testAsync('★ 下载按钮不许没有底色（次级也要看得出是按钮）', () => {
+  const html = fs.readFileSync(path.join(SITE, 'public', 'index.html'), 'utf8');
+  const m = /\.dbtn\.sec\s*\{([^}]*)\}/.exec(html);
+  assert.ok(m, '首页应定义 .dbtn.sec（一张卡里第二个文件的样式）');
+  assert.ok(!/background\s*:\s*transparent/i.test(m[1]), '.dbtn.sec 不能是透明底');
+  assert.match(m[1], /background\s*:\s*rgba?\(/i, '.dbtn.sec 必须有可见底色');
+  // 模板确实会给第 2 个文件加 sec —— 否则这条样式根本用不上，等于白测
+  assert.ok(/class="dbtn\$\{i \? ' sec' : ''\}"/.test(html), '下载卡模板应给第 2 个文件加 sec 类');
+});
+
+console.log('\n[5] 在线爆破限速');
 await testAsync('同一 IP 连续试错 → 第 9 次起 429', async () => {
   clearJar();
   let got429 = false;
