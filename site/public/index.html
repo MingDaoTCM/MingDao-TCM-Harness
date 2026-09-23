@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>明道中医 · 问诊台</title>
+<link rel="icon" href="/favicon.ico" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#10141d; --bg3:#161b27; --border:#242b3a;
+    --text:#e8ecf4; --dim:#98a2b8; --faint:#5c6679;
+    --jade:#14b8a6; --jade2:#17c3a2; --cyan:#22b8cf; --yellow:#ffc94d; --red:#ff6b6b;
+    --code:#0d1017;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.75 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  html{scroll-behavior:smooth}
+  a{color:var(--jade);text-decoration:none}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 22px}
+  header{position:sticky;top:0;z-index:10;background:rgba(11,14,20,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  header .wrap{display:flex;align-items:center;gap:14px;height:62px}
+  header img{width:30px;height:30px;border-radius:8px}
+  header b{font-size:15.5px;letter-spacing:.2px}
+  header nav{margin-left:auto;display:flex;gap:18px;align-items:center;font-size:14px}
+  header nav a{color:var(--dim)}
+  header nav a:hover{color:var(--text)}
+  .out{border:1px solid var(--border);border-radius:8px;padding:5px 12px;color:var(--dim);cursor:pointer;background:transparent;font:14px inherit}
+  .out:hover{color:var(--text);border-color:var(--jade)}
+  .hero{padding:74px 0 54px;background:radial-gradient(1200px 520px at 50% -12%,rgba(23,195,162,.14),transparent 62%)}
+  .hero h1{font-size:40px;line-height:1.28;margin:0 0 16px;letter-spacing:.3px}
+  .hero h1 span{background:linear-gradient(120deg,var(--jade2),var(--cyan));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.lead{font-size:16.5px;color:var(--dim);max-width:760px;margin:0 0 14px}
+  .hero .pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+  .pill{font-size:12.5px;color:var(--dim);border:1px solid var(--border);border-radius:999px;padding:4px 12px;background:var(--bg2)}
+  .pill.j{color:var(--jade);border-color:rgba(20,184,166,.42);background:rgba(20,184,166,.08)}
+  section{padding:52px 0}
+  section.alt{background:var(--bg2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+  h2{font-size:21px;margin:0 0 8px;display:flex;align-items:center;gap:9px}
+  h2 .dot{color:var(--jade);font-size:13px}
+  .sec-sub{color:var(--dim);margin:0 0 26px;max-width:820px;font-size:14.5px}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(252px,1fr))}
+  .card{background:var(--bg3);border:1px solid var(--border);border-radius:13px;padding:18px 18px 16px}
+  .card h3{margin:0 0 7px;font-size:15.5px;display:flex;align-items:center;gap:8px}
+  .card h3 .ic{font-size:17px}
+  .card p{margin:0;color:var(--dim);font-size:13.8px}
+  .card ul{margin:6px 0 0;padding-left:19px;color:var(--dim);font-size:13.8px}
+  .card li{margin:3px 0}
+  /* 下载卡 */
+  .dl{background:var(--bg3);border:1px solid var(--border);border-radius:13px;padding:18px;display:flex;flex-direction:column;gap:10px}
+  .dl .hd{display:flex;gap:12px;align-items:center}
+  .dl .hd .ic{font-size:24px}
+  .dl .hd b{display:block;font-size:15.5px}
+  .dl .hd span{font-size:12.5px;color:var(--faint)}
+  .dbtn{display:block;text-align:center;background:linear-gradient(135deg,var(--jade2),#0b6e8f);color:#04120f;font-weight:700;
+        border-radius:9px;padding:11px 14px;font-size:14px}
+  .dbtn:hover{filter:brightness(1.08)}
+  .dbtn.sec{background:transparent;border:1px solid var(--border);color:var(--text);font-weight:500}
+  .dl .note{font-size:12.5px;color:var(--faint);margin:0}
+  .dl code{background:var(--code);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:11px;color:var(--dim);word-break:break-all}
+  .empty{color:var(--faint);font-size:14px;padding:18px;border:1px dashed var(--border);border-radius:12px;text-align:center}
+  table.ver{width:100%;border-collapse:collapse;font-size:14px}
+  table.ver th,table.ver td{border-bottom:1px solid var(--border);padding:10px 12px;text-align:left;vertical-align:top}
+  table.ver th{color:var(--faint);font-weight:400;font-size:12.5px;white-space:nowrap}
+  table.ver td.v{color:var(--jade);white-space:nowrap;font-variant-numeric:tabular-nums}
+  footer{border-top:1px solid var(--border);padding:30px 0 44px;color:var(--faint);font-size:13px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  footer .sp{flex:1}
+  .warn{color:var(--yellow)}
+  code{background:var(--code);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:12.5px;color:var(--cyan)}
+</style>
+</head>
+<body>
+
+<header><div class="wrap">
+  <img src="/assets/icon.png" alt="" />
+  <b>明道中医 · 问诊台</b>
+  <nav>
+    <a href="#downloads">下载</a>
+    <a href="#ability">能力</a>
+    <a href="#compliance">合规</a>
+    <a href="#versions">版本</a>
+    <a href="/admin">后台</a>
+    <button class="out" id="logout">退出</button>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <h1>明道中医 <span>问诊台</span><br>给中医师用的智能问诊工作台</h1>
+  <p class="lead">
+    面向中医门诊的垂域智能体外壳：<b>问诊对话与辨证知识交给 Dify（RAG）</b>，
+    <b>患者识别、病历落盘、复诊对比、回访追踪由本地内核强制</b>。
+    中西医术语不做改写，判断权始终归属执业医师。
+  </p>
+  <p class="lead" style="font-size:14.5px">
+    病历号制患者主键 · 主诉/现病史必填 · 缺项绝不编造 · 不输出诊疗结论（内核红线，非提示词劝告）·
+    患者数据本地化，不入库、不出内网。
+  </p>
+  <div class="pills">
+    <span class="pill j">Windows / macOS / Linux 桌面版</span>
+    <span class="pill">病历号 + 同名候选确认</span>
+    <span class="pill">复诊四态对比</span>
+    <span class="pill">回访看板与超期预警</span>
+    <span class="pill">审计与费用归因</span>
+  </div>
+</div></section>
+
+<section id="downloads" class="alt"><div class="wrap">
+  <h2><span class="dot">●</span> 下载桌面版 <span id="verTag" class="pill j" style="font-size:12px"></span></h2>
+  <p class="sec-sub">
+    内置内核与问诊台的一次性安装包：双击即用、无需终端。安装后首次启动会引导填入模型与 Dify 的密钥
+    （密钥只存在本机 <code>MINGDAO_HOME</code>，不上传）。本页安装包由本站在内网提供，不依赖 GitHub 下载。
+  </p>
+  <div class="grid g2" id="dlGrid"><div class="empty">正在读取安装包清单…</div></div>
+  <p class="sec-sub" style="margin-top:18px;font-size:12.8px">
+    <span class="warn">签名说明</span>：目前 Linux / Windows 安装包为未签名构建；macOS 首次打开若被 Gatekeeper 拦，
+    可右键「打开」或执行 <code>xattr -dr com.apple.quarantine /Applications/明道中医.app</code>。
+  </p>
+</div></section>
+
+<section id="ability"><div class="wrap">
+  <h2><span class="dot">●</span> 它为中医门诊做了什么</h2>
+  <p class="sec-sub">不做通用助手，只做中医垂域那一层 —— 每个能力都在内核的同一条链路里（权限 / 审计 / 计费 / 约束）。</p>
+  <div class="grid g3">
+    <div class="card"><h3><span class="ic">🗂</span>病历号制患者主键</h3>
+      <p>姓名同名在门诊极常见，用姓名当主键会混病历。这里主键是病历号，姓名 + 出生年 + 性别只是收窄条件；
+        同名多命中时<b>返回候选请医师确认，绝不替你挑一个</b>。</p></div>
+    <div class="card"><h3><span class="ic">📋</span>门诊病历结构</h3>
+      <p>主诉、现病史为必填；既往史 / 家族史 / 过敏史 / 流行病史 / 体格检查 / 舌象 / 脉象 / 随访可选。
+        舌象与脉象单独留字段 —— 此前无处可放，医师写下的舌脉会被直接丢掉。</p></div>
+    <div class="card"><h3><span class="ic">🔁</span>复诊四态对比</h3>
+      <p>消失 / 减轻 / 无变化 / 加重，逐项列出。只陈述事实，不作疗效结论 —— 对比表是用来给医师判断的，不是替代判断。</p></div>
+    <div class="card"><h3><span class="ic">📞</span>回访看板与超期预警</h3>
+      <p>按超期优先排列的名册，临期提前提醒；单患者时间线、异常预警与随访话术草稿（草稿标注「需医师确认」）。</p></div>
+    <div class="card"><h3><span class="ic">🚧</span>红线由内核强制</h3>
+      <p>缺项绝不编造、不输出诊疗结论、不得跨患者串病历 —— 这三条是内核约束，不是提示词里的一句劝告；
+        命中会进审计，可回溯「哪条红线、在什么时候被触发」。</p></div>
+    <div class="card"><h3><span class="ic">💰</span>费用与审计</h3>
+      <p>每一次域内模型调用都计入归因（<code>cost --by pack</code> 可查），长任务期间今日费用实时累计。</p></div>
+  </div>
+</div></section>
+
+<section id="compliance" class="alt"><div class="wrap">
+  <h2><span class="dot">●</span> 数据与合规</h2>
+  <div class="grid g2">
+    <div class="card"><h3>患者数据本地化</h3>
+      <ul>
+        <li>患者注册表与病历快照存在本机 <code>MINGDAO_HOME</code>，<b>不入 git、不上传</b>；</li>
+        <li>写入用原子写（临时文件 + rename），崩溃不留半份病历；</li>
+        <li>半份病历<b>刻意不落盘</b> —— 它会被下次复诊当成基线，比没有更危险；</li>
+        <li>注册表损坏时<b>大声失败</b>，绝不降级成空注册表（发错病历号不可逆）。</li>
+      </ul></div>
+    <div class="card"><h3>定位与边界</h3>
+      <ul>
+        <li>本产品为<b>知识工作助手</b>，不输出诊疗建议、不下诊断；</li>
+        <li>临床使用须遵守《个人信息保护法》及互联网诊疗相关规定；</li>
+        <li>判断权始终归属执业医师；</li>
+        <li>问答与辨证知识来自医师所在机构自有的 Dify 工作流与知识库。</li>
+      </ul></div>
+  </div>
+</div></section>
+
+<section id="versions"><div class="wrap">
+  <h2><span class="dot">●</span> 版本动态</h2>
+  <p class="sec-sub">桌面版与垂域层一起发版；内核（MingDao-Harness）版本单独跟随上游。</p>
+  <table class="ver">
+    <thead><tr><th>版本</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td class="v">v0.1.1</td><td>更换应用图标（玉青脉象，与上游区分）；GitHub Actions 三平台自动出包。</td></tr>
+      <tr><td class="v">v0.1.0</td><td>首个桌面版：内置内核与问诊台，双击即用；患者名册 / 复诊时间线 / 随访提醒 / 复诊上下文修复。</td></tr>
+      <tr><td class="v">垂域层</td><td>Pack API v1：5 个域工具 + 4 条红线；路线 A 接线（Dify 主问诊 + 工具编排）；问诊台独立前端。</td></tr>
+    </tbody>
+  </table>
+</div></section>
+
+<footer><div class="wrap">
+  <span>© 2026 明道中医 · 本页为内部站点，请勿外传</span>
+  <span class="sp"></span>
+  <span id="footVer" style="color:var(--faint)"></span>
+</div></footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const fmtSize = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB';
+
+// 平台分组：决定「哪几个文件归到一张卡」以及卡片标题/图标/说明
+const GROUPS = [
+  { key: 'win', ic: '🪟', title: 'Windows 10/11', sub: 'NSIS 安装包 · x64', note: '安装后从开始菜单启动；首次运行若出现 SmartScreen 提示，点「更多信息 → 仍要运行」。', match: (f) => /\.exe$/i.test(f.name) },
+  { key: 'mac-arm', ic: '🍎', title: 'macOS · Apple 芯片', sub: 'dmg · arm64', note: '适用于 M 系列芯片。首次打开若被 Gatekeeper 拦，右键「打开」即可。', match: (f) => /arm64.*\.dmg$/i.test(f.name) },
+  { key: 'mac-x64', ic: '🍎', title: 'macOS · Intel', sub: 'dmg · x64', note: '适用于 Intel 芯片。首次打开若被 Gatekeeper 拦，右键「打开」即可。', match: (f) => /x64.*\.dmg$/i.test(f.name) },
+  { key: 'linux', ic: '🐧', title: 'Linux', sub: 'deb / AppImage · x64', note: 'deb 用 <code>sudo dpkg -i</code> 安装；AppImage 需 <code>chmod +x</code> 后双击。', match: (f) => /\.(deb|AppImage)$/i.test(f.name) },
+];
+
+function card(g, files) {
+  const btns = files.map((f, i) =>
+    `<a class="dbtn${i ? ' sec' : ''}" href="/downloads/${encodeURIComponent(f.name)}">⬇ ${f.name.replace(/^mingdao-tcm(-setup)?-/, '').replace(/^MingDao\.TCM-/, '')} · ${fmtSize(f.size)}</a>`
+  ).join('');
+  const shas = files.map((f) => f.sha256
+    ? `<p class="note">sha256 <code>${f.sha256}</code></p>` : '').join('');
+  return `<div class="dl"><div class="hd"><div class="ic">${g.ic}</div>
+      <div><b>${g.title}</b><span>${g.sub}</span></div></div>
+      ${btns}<p class="note">${g.note}</p>${shas}</div>`;
+}
+
+(async () => {
+  const grid = $('#dlGrid');
+  try {
+    const r = await fetch('/api/downloads');
+    if (r.status === 401) { location.href = '/'; return; }
+    const j = await r.json();
+    const files = j.files || [];
+    if (!files.length) {
+      grid.innerHTML = '<div class="empty">安装包尚未上传 —— 发布流程执行 <code>site/deploy.sh</code> 后即可在此下载。</div>';
+      return;
+    }
+    const ver = j.version || (files[0].name.match(/v?(\d+\.\d+\.\d+)/) || [])[1] || '';
+    if (ver) { $('#verTag').textContent = 'v' + ver; $('#footVer').textContent = '安装包 v' + ver; }
+    grid.innerHTML = GROUPS
+      .map((g) => ({ g, files: files.filter(g.match) }))
+      .filter((x) => x.files.length)
+      .map((x) => card(x.g, x.files))
+      .join('') || '<div class="empty">清单里没有可识别的安装包。</div>';
+  } catch (e) {
+    grid.innerHTML = '<div class="empty">读取安装包清单失败：' + (e?.message || e) + '</div>';
+  }
+})();
+
+$('#logout').onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.href = '/';
+};
+</script>
+</body>
+</html>

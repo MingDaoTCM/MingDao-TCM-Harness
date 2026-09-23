@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>明道中医 · 问诊台 — 内部站点</title>
+<link rel="icon" href="/favicon.ico" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#10141d; --border:#242b3a;
+    --text:#e8ecf4; --dim:#98a2b8; --faint:#5c6679;
+    --jade:#14b8a6; --jade2:#17c3a2; --red:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;min-height:100vh;background:
+      radial-gradient(1100px 520px at 50% -10%,rgba(23,195,162,.13),transparent 62%),var(--bg);
+    color:var(--text);display:flex;align-items:center;justify-content:center;padding:24px;
+    font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  }
+  .gate{width:100%;max-width:396px;text-align:center}
+  .gate img{width:76px;height:76px;border-radius:20px;box-shadow:0 10px 34px rgba(23,195,162,.28)}
+  h1{font-size:20px;margin:20px 0 4px;letter-spacing:.3px}
+  .sub{color:var(--dim);font-size:13.5px;margin:0 0 26px}
+  form{display:flex;flex-direction:column;gap:10px}
+  input{
+    width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);
+    border-radius:10px;padding:13px 14px;font:15px inherit;outline:none;text-align:center;letter-spacing:.12em;
+  }
+  input:focus{border-color:var(--jade)}
+  button{
+    background:linear-gradient(135deg,var(--jade2),#0b6e8f);border:0;color:#04120f;font-weight:700;
+    border-radius:10px;padding:13px;font:15px inherit;cursor:pointer;letter-spacing:.5px;
+  }
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .msg{margin-top:12px;font-size:13.5px;min-height:20px}
+  .ok{color:#3ddc97}.err{color:var(--red)}.dim{color:var(--dim)}
+  .foot{color:var(--faint);font-size:12.5px;margin-top:30px}
+</style>
+</head>
+<body>
+  <div class="gate">
+    <img src="/assets/icon.png" alt="明道中医" />
+    <h1>明道中医 · 问诊台</h1>
+    <p class="sub">内部站点 · 需要访问密码</p>
+    <form id="f" autocomplete="off">
+      <input id="pw" type="password" placeholder="访问密码" autocomplete="current-password" autofocus />
+      <button id="go" type="submit">进 入</button>
+    </form>
+    <div class="msg" id="m" role="status" aria-live="polite"></div>
+    <p class="foot">本页不对外开放。忘记密码请联系管理员在后台重置。</p>
+  </div>
+<script>
+  const $ = (s) => document.querySelector(s);
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const m = $('#m'), go = $('#go');
+    const pw = $('#pw').value;
+    if (!pw) { m.className = 'msg err'; m.textContent = '请输入密码'; return; }
+    go.disabled = true; m.className = 'msg dim'; m.textContent = '验证中…';
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+      if (j.ok) { m.className = 'msg ok'; m.textContent = '✓ 通过，正在进入…'; location.href = '/'; return; }
+      m.className = 'msg err'; m.textContent = '✗ ' + (j.error || '密码不正确');
+      $('#pw').value = ''; $('#pw').focus();
+    } catch (err) {
+      m.className = 'msg err'; m.textContent = '✗ 网络错误：' + (err?.message || err);
+    } finally { go.disabled = false; }
+  });
+</script>
+</body>
+</html>

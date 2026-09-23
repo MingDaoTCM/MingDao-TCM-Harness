@@ -1,0 +1,268 @@
+// 站点服务的端到端测试：真起进程、跑完整流程。
+//   node site/test/site.test.mjs
+//
+// 为什么值得单独测：这个服务的**全部价值**就是「没密码进不来 + 改密码真的生效 + 下载要登录」。
+// 这三条任何一条无声失效，表现都是"页面照常打开"，肉眼看不出来 —— 只能靠断言。
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SITE = path.resolve(HERE, '..');
+const PORT = 18448 + Math.floor(Math.random() * 400);
+const BASE = `http://127.0.0.1:${PORT}`;
+const INIT_PW = 'test-init-pw-1';
+
+let passed = 0;
+let failed = 0;
+async function testAsync(name, fn) {
+  try { await fn(); passed += 1; console.log(`  ✓ ${name}`); }
+  catch (e) { failed += 1; console.log(`  ✗ ${name}\n      ${e?.message || e}`); }
+}
+
+// ── 临时站点根（public/ 拷一份 + 造两个假安装包）──
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-site-root-'));
+const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-site-data-'));
+fs.cpSync(path.join(SITE, 'public'), ROOT, { recursive: true });
+const DL = path.join(ROOT, 'downloads');
+fs.mkdirSync(DL, { recursive: true });
+fs.writeFileSync(path.join(DL, 'mingdao-tcm-setup-0.9.9-x64.exe'), Buffer.alloc(2048, 7));
+fs.writeFileSync(path.join(DL, 'mingdao-tcm-0.9.9-x86_64.AppImage'), Buffer.alloc(1024, 9));
+fs.writeFileSync(path.join(DL, 'manifest.json'), JSON.stringify({
+  version: '0.9.9',
+  files: [
+    { name: 'mingdao-tcm-setup-0.9.9-x64.exe', size: 2048, sha256: 'a'.repeat(64) },
+    { name: 'mingdao-tcm-0.9.9-x86_64.AppImage', size: 1024, sha256: 'b'.repeat(64) },
+  ],
+}));
+
+// ── 起服务 ──
+const child = spawn(process.execPath, [path.join(SITE, 'server.mjs')], {
+  env: { ...process.env, TCM_PORT: String(PORT), TCM_ROOT: ROOT, TCM_DATA: DATA, TCM_INIT_PASSWORD: INIT_PW, TCM_TRUST_PROXY: '0' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let serverLog = '';
+child.stdout.on('data', (d) => { serverLog += d; });
+child.stderr.on('data', (d) => { serverLog += d; });
+async function waitUp() {
+  for (let i = 0; i < 60; i++) {
+    try { const r = await fetch(BASE + '/api/session'); if (r.ok) return true; } catch { /* 还没起来 */ }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return false;
+}
+
+const jar = {};
+/** 改密前抓下来的那条 cookie —— 用来验证「改密即吊销旧会话」 */
+let preChangeSession = '';
+function setJar(res) {
+  const sc = res.headers.getSetCookie ? res.headers.getSetCookie() : [res.headers.get('set-cookie')].filter(Boolean);
+  for (const c of sc) {
+    const [kv] = String(c).split(';');
+    const i = kv.indexOf('=');
+    jar[kv.slice(0, i).trim()] = kv.slice(i + 1).trim();
+  }
+}
+const cookieHeader = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
+async function req(p, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (opts.auth !== false && cookieHeader()) headers.cookie = cookieHeader();
+  const r = await fetch(BASE + p, { ...opts, headers, redirect: 'manual' });
+  setJar(r);
+  return r;
+}
+const login = (password) => req('/api/login', {
+  method: 'POST', auth: false, headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ password }),
+});
+const clearJar = () => { for (const k of Object.keys(jar)) delete jar[k]; };
+
+console.log('\n[0] 启动');
+await testAsync('服务能起来', async () => {
+  assert.ok(await waitUp(), '服务未在 9s 内就绪；日志：\n' + serverLog);
+});
+
+console.log('\n[1] 密码门（核心：没密码进不来）');
+await testAsync('未登录访问 / → 看到登录页，不是首页', async () => {
+  const r = await req('/', { auth: false });
+  const html = await r.text();
+  assert.equal(r.status, 200);
+  assert.match(html, /需要访问密码/, '应是登录页');
+  assert.ok(!/下载桌面版/.test(html), '绝不能把首页内容发给未登录的人');
+});
+await testAsync('密码错误 → 401，且不下发会话', async () => {
+  clearJar();
+  const r = await login('wrong-password');
+  assert.equal(r.status, 401);
+  const j = await r.json();
+  assert.equal(j.ok, false);
+  assert.ok(!jar.tcm_session, '失败绝不能给 cookie');
+});
+await testAsync('密码正确 → 下发 HttpOnly + Secure + SameSite 的会话 cookie', async () => {
+  clearJar();
+  const r = await login(INIT_PW);
+  assert.equal(r.status, 200);
+  const sc = (r.headers.getSetCookie ? r.headers.getSetCookie() : [r.headers.get('set-cookie')]).join(';');
+  assert.match(sc, /HttpOnly/i, 'cookie 必须 HttpOnly（防 XSS 偷会话）');
+  assert.match(sc, /SameSite=Lax/i);
+  assert.ok(/Secure/i.test(sc), '必须 Secure（站点只走 https）');
+  assert.ok(jar.tcm_session, '应拿到会话');
+});
+await testAsync('带会话再访问 / → 拿到真正的首页', async () => {
+  const r = await req('/');
+  const html = await r.text();
+  assert.equal(r.status, 200);
+  assert.match(html, /下载桌面版/, '应看到首页');
+  assert.match(html, /明道中医/);
+});
+
+console.log('\n[2] 安装包下载（必须登录）');
+await testAsync('/api/downloads 未登录 → 401', async () => {
+  const saved = jar.tcm_session;
+  clearJar();
+  const r = await req('/api/downloads', { auth: false });
+  assert.equal(r.status, 401);
+  jar.tcm_session = saved;
+});
+await testAsync('/downloads/<文件> 未登录 → 302 回首页（不能直接拿走安装包）', async () => {
+  const saved = jar.tcm_session;
+  clearJar();
+  const r = await req('/downloads/mingdao-tcm-setup-0.9.9-x64.exe', { auth: false });
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.get('location'), '/');
+  jar.tcm_session = saved;
+});
+await testAsync('登录后能拿到安装包本体，且字节数正确', async () => {
+  const r = await req('/downloads/mingdao-tcm-setup-0.9.9-x64.exe');
+  assert.equal(r.status, 200);
+  const buf = Buffer.from(await r.arrayBuffer());
+  assert.equal(buf.length, 2048);
+  assert.equal(buf[0], 7, '内容应是那个假包，不是 HTML');
+  assert.match(String(r.headers.get('content-disposition')), /attachment/);
+});
+await testAsync('支持 Range（大文件断点续传）', async () => {
+  const r = await req('/downloads/mingdao-tcm-setup-0.9.9-x64.exe', { headers: { Range: 'bytes=0-99' } });
+  assert.equal(r.status, 206);
+  assert.match(String(r.headers.get('content-range')), /^bytes 0-99\/2048$/);
+  assert.equal(Buffer.from(await r.arrayBuffer()).length, 100);
+});
+await testAsync('路径穿越拿不到 public/ 以外的东西', async () => {
+  for (const bad of ['../server.mjs', '..%2Fserver.mjs', '%2e%2e%2fserver.mjs', '..././server.mjs']) {
+    const r = await req('/downloads/' + bad);
+    assert.ok([400, 404, 302].includes(r.status), `${bad} 应被拒，实际 ${r.status}`);
+    const t = await r.text();
+    assert.ok(!/createServer/.test(t), `${bad} 不该读到服务端源码`);
+  }
+});
+
+console.log('\n[3] 后台（独立管理员密码）');
+// 注意：初始密码**访问/管理相同**（首次部署就是这样，否则装完没人知道密码）。
+// 所以想测准「改访问密码」必须先让两个密码分离，否则旧访问密码仍能当管理员登进来 —— 那是测试设计的坑，不是服务的。
+await testAsync('初始密码登录即为管理员（所以部署后第一件事就是改掉它）', async () => {
+  clearJar();
+  assert.equal((await login(INIT_PW)).status, 200);
+  const me = await (await req('/api/session')).json();
+  assert.equal(me.authed, true);
+  assert.equal(me.admin, true);
+  assert.equal(me.role, undefined, 'session 接口只回布尔，不该泄露 role');
+});
+await testAsync('先把管理员密码改成独立的（改管理员密码会清掉当前会话）', async () => {
+  const r = await req('/api/admin/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: 'admin', current: INIT_PW, next: 'admin-pw-A' }),
+  });
+  assert.equal(r.status, 200);
+  assert.ok(!jar.tcm_session, '改管理员密码后应强制重登');
+  clearJar();
+  assert.equal((await login('admin-pw-A')).status, 200, '新管理员密码应可用');
+  assert.equal((await req('/admin')).status, 200, '新管理员密码应能进后台');
+});
+await testAsync('★ 用「访问密码」拿到的会话进不了后台（后台靠独立的管理员密码）', async () => {
+  clearJar();
+  assert.equal((await login(INIT_PW)).status, 200, '访问密码此时仍是初始密码');
+  const me = await (await req('/api/session')).json();
+  assert.equal(me.authed, true);
+  assert.equal(me.admin, false, '这应是普通访问会话，不是管理员');
+  assert.equal((await req('/admin')).status, 302, '普通会话不能进后台');
+  const bad = await req('/api/admin/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: 'site', current: INIT_PW, next: 'whatever-99' }),
+  });
+  assert.equal(bad.status, 403, '普通会话改密码必须 403');
+});
+await testAsync('管理员改访问密码：旧访问密码失效、新访问密码可用', async () => {
+  clearJar();
+  assert.equal((await login('admin-pw-A')).status, 200);
+  preChangeSession = jar.tcm_session; // 抓改密前那条 cookie，下一条测试用它验吊销
+  const r = await req('/api/admin/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: 'site', current: INIT_PW, next: 'new-site-pw-9' }),
+  });
+  assert.equal(r.status, 200, '改访问密码应成功：' + (await r.text()));
+  clearJar();
+  assert.equal((await login(INIT_PW)).status, 401, '旧访问密码必须失效');
+  assert.equal((await login('new-site-pw-9')).status, 200, '新访问密码必须能用');
+  assert.match(await (await req('/')).text(), /下载桌面版/);
+});
+await testAsync('★ 改密即吊销旧会话（拿改密前那条 cookie 直接打，必须 401）', async () => {
+  assert.ok(preChangeSession, '前置测试应已抓到旧 cookie');
+  const r = await fetch(BASE + '/api/downloads', { headers: { cookie: `tcm_session=${preChangeSession}` } });
+  assert.equal(r.status, 401, '改密后旧会话必须失效（否则"改了密码别人还进得来"）');
+});
+await testAsync('改访问密码时**不该把正在操作的管理员踢出去**（服务给他续了新 cookie）', async () => {
+  // 用新访问密码拿到的只是 viewer，这里重新用管理员登录来验证"管理员连续操作不被中断"
+  clearJar();
+  assert.equal((await login('admin-pw-A')).status, 200);
+  const r = await req('/api/admin/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: 'site', current: 'new-site-pw-9', next: 'new-site-pw-10' }),
+  });
+  assert.equal(r.status, 200);
+  assert.ok(jar.tcm_session, '改访问密码后管理员应仍持有有效会话');
+  assert.equal((await req('/admin')).status, 200, '管理员应仍能进后台（未被踢出）');
+});
+await testAsync('当前密码不对 → 401；新密码太短 → 400', async () => {
+  const bad = await req('/api/admin/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: 'site', current: 'definitely-wrong', next: 'whatever-1' }),
+  });
+  assert.equal(bad.status, 401);
+  const short = await req('/api/admin/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: 'site', current: 'new-site-pw-10', next: '123' }),
+  });
+  assert.equal(short.status, 400, '太短的新密码应被拒');
+});
+
+console.log('\n[4] 在线爆破限速');
+await testAsync('同一 IP 连续试错 → 第 9 次起 429', async () => {
+  clearJar();
+  let got429 = false;
+  for (let i = 0; i < 12; i++) {
+    const r = await login('brute-force-' + i);
+    if (r.status === 429) { got429 = true; break; }
+  }
+  assert.ok(got429, '连续失败应触发限速');
+});
+
+console.log('\n[5] 凭据存储');
+await testAsync('auth.json 是 0600 且**不含明文密码**', () => {
+  const p = path.join(DATA, 'auth.json');
+  const txt = fs.readFileSync(p, 'utf8');
+  const mode = fs.statSync(p).mode & 0o777;
+  assert.equal(mode, 0o600, `auth.json 权限应为 600，实际 ${mode.toString(8)}`);
+  for (const pw of [INIT_PW, 'admin-pw-A', 'new-site-pw-9', 'new-site-pw-10']) {
+    assert.ok(!txt.includes(pw), `auth.json 里不该出现明文密码 ${pw}`);
+  }
+  const j = JSON.parse(txt);
+  assert.ok(j.sessionSecret && j.site?.salt && j.site?.hash && j.admin?.hash, '结构应完整');
+});
+
+child.kill('SIGTERM');
+fs.rmSync(ROOT, { recursive: true, force: true });
+fs.rmSync(DATA, { recursive: true, force: true });
+console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
+process.exit(failed ? 1 : 0);
