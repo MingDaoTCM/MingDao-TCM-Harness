@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: 门禁（7 档）
+      - name: 门禁（8 档）
         working-directory: tcm
         env:
           MINGDAO_KERNEL: ${{ github.workspace }}/MingDao-Harness
@@ -42,3 +42,4 @@ jobs:
           node tools/tcm-ui/test/tcm-data.test.mjs
           node tools/tcm-ui/test/ui-wiring.test.mjs
           node tools/tcm-ui/test/desktop-orchestrator.test.mjs
+          node site/test/site.test.mjs
