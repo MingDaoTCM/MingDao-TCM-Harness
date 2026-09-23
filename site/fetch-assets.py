@@ -140,6 +140,23 @@ def main():
         raise SystemExit('Release %s 没有可发布的安装包' % a.tag)
     print('  共 %d 个安装包' % len(assets), flush=True)
 
+    # 只保留本版本的包：多个版本混在一个目录里时，清单会把它们全列出来
+    # （页面上同时出现 0.1.2 / 0.1.3，医师不知道下哪个）。下之前先清掉不属于本次 release 的。
+    keep_names = set(x['name'] for x in assets)
+    for old in os.listdir(a.dir):
+        if old in keep_names or old == 'manifest.json':
+            continue
+        if old.endswith(KEEP):
+            try:
+                os.unlink(os.path.join(a.dir, old))
+                print('  ✗ 清掉旧版本：%s' % old, flush=True)
+            except OSError:
+                pass
+    try:
+        os.unlink(os.path.join(a.dir, 'manifest.json'))
+    except OSError:
+        pass
+
     files = []
     for x in assets:
         name, dst = x['name'], os.path.join(a.dir, x['name'])

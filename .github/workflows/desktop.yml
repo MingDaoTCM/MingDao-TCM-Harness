@@ -161,6 +161,9 @@ jobs:
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
           SSHOPT="-i $HOME/.ssh/id_tcm -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
           timeout 60 ssh $SSHOPT "$TARGET" 'mkdir -p /opt/1panel/www/sites/tcm-site/downloads'
+          # 先清掉**其它版本**的包与旧清单：目录里混着多个版本时，清单会把它们全列出来，
+          # 页面上同时出现 0.1.2 / 0.1.3，医师不知道下哪个。
+          ssh $SSHOPT "$TARGET" "cd /opt/1panel/www/sites/tcm-site/downloads && ls -1 2>/dev/null | grep -vE '${{ github.ref_name }}|^manifest\.json$' | grep -E '\\.(exe|dmg|zip|AppImage|deb)\$' | xargs -r rm -f ; rm -f manifest.json ; echo cleaned"
           # artifacts 按平台分在子目录里，这里把安装包本体展平上传
           timeout 1200 rsync -a --info=stats2 -e "ssh $SSHOPT" \
             --include='*/' --include='*.exe' --include='*.dmg' --include='*.zip' \
