@@ -118,7 +118,7 @@ def main():
             raise SystemExit('downloads/ 里没有安装包，拒绝写空清单')
         manifest = {
             'version': tag.lstrip('v'),
-            'generatedAt': datetime.datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+            'generatedAt': datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
             'files': files,
         }
         tmp = os.path.join(d, '.manifest.json.tmp')
@@ -153,7 +153,7 @@ def main():
     # 原子写：manifest 只在全齐之后出现（页面据它渲染，残缺清单比没有更糟）
     manifest = {
         'version': a.tag.lstrip('v'),
-        'generatedAt': datetime.datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+        'generatedAt': datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
         'files': sorted(files, key=lambda f: f['name']),
     }
     tmp = os.path.join(a.dir, '.manifest.json.tmp')
