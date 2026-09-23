@@ -56,67 +56,24 @@ fi
 VER="${TAG#v}"
 say "版本：$TAG"
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/downloads"
-
-# Release 刚创建时资产可能还没挂上 —— 2026-09-23 实测踩到：CI 建完 Release 的**同一分钟**跑部署，
-# 查到 0 个资产、脚本却一路走完，最后上传了个空的下载区（页面上"清单为空"）。所以先等就绪再拉。
-N=0
-for i in $(seq 1 12); do
-  N="$(curl -s -m 30 -H "Authorization: Bearer $GH_TOKEN" \
-    "https://api.github.com/repos/$GH_REPO/releases/tags/$TAG" \
-    | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("assets",[])))' 2>/dev/null || echo 0)"
-  [ "${N:-0}" -gt 0 ] && break
-  say "  Release 资产尚未就绪（第 $i/12 次，等 6s）…"
-  sleep 6
-done
-[ "${N:-0}" -gt 0 ] || die "Release $TAG 没有任何安装包资产（CI 的 publish 作业是否失败？）"
-
-python3 - "$GH_TOKEN" "$GH_REPO" "$TAG" "$WORK" <<'PY'
-import json, sys, os, urllib.request
-token, repo, tag, work = sys.argv[1:5]
-req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
-                             headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
-rel = json.load(urllib.request.urlopen(req))
-keep = (".exe", ".dmg", ".zip", ".AppImage", ".deb")
-for a in rel.get("assets", []):
-    if not a["name"].endswith(keep):
-        continue
-    r = urllib.request.Request(a["url"], headers={"Authorization": f"Bearer {token}", "Accept": "application/octet-stream"})
-    dst = os.path.join(work, "downloads", a["name"])
-    with urllib.request.urlopen(r) as resp, open(dst, "wb") as f:
-        while True:
-            chunk = resp.read(1 << 20)
-            if not chunk:
-                break
-            f.write(chunk)
-    print(f"    ↓ {a['name']}  {a['size']/1048576:.1f} MB")
-PY
-
-# ── 生成 manifest.json（站点前台据它渲染下载卡）──
-python3 - "$VER" "$WORK/downloads" <<'PY'
-import hashlib, json, os, sys, datetime
-ver, d = sys.argv[1:3]
-def sha256(p):
-    h = hashlib.sha256()
-    with open(p, "rb") as f:
-        for b in iter(lambda: f.read(1 << 20), b""):
-            h.update(b)
-    return h.hexdigest()
-files = []
-for n in sorted(os.listdir(d)):
-    if not n.endswith((".exe", ".dmg", ".zip", ".AppImage", ".deb")):
-        continue
-    p = os.path.join(d, n)
-    files.append({"name": n, "size": os.path.getsize(p), "sha256": sha256(p)})json.dump({"version": ver, "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "files": files},
-          open(os.path.join(d, "manifest.json"), "w"), ensure_ascii=False, indent=2)
-print(f"    manifest.json：{len(files)} 个文件")
-PY
-# 0 个文件必须**当场失败**：否则会安静地上传一个空的下载区（页面显示"清单为空"），
-# 而脚本一路绿 —— 2026-09-23 就是这么把空下载区发上去的。
-NFILES="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["files"]))' "$WORK/downloads/manifest.json" 2>/dev/null || echo 0)"
-[ "${NFILES:-0}" -gt 0 ] || die "安装包清单是空的（0 个文件）—— 不要继续部署"
+# ── 取安装包：**交给服务器自己去拉**，本机不下载 ───────────────────────────
+# 实测（2026-09-23）：本机 → GitHub ≈ 40KB/s，服务器 → GitHub ≈ 130KB/s，
+# 而这台服务器**上行只有 50–100KB/s**（上游脚本里自己写明的）。
+# 所以"本机拉好再 scp 上去"等于把 500MB 走两遍慢链路 —— 让服务器自己拉，且丢后台：
+# 站点先立起来，包慢慢到位（manifest.json 只在全齐后才出现，页面看到的就是完整的）。
+say "把取包任务丢到服务器后台（本机不经手那 500MB）"
+scp -q -o ConnectTimeout=15 fetch-assets.py "$SERVER:/opt/mingdao/tcm-fetch-assets.py"
+S "mkdir -p '$SITE_ROOT/downloads'"
+# token 落到服务器上的 0600 临时文件，脚本读完**立即 unlink** —— 既不进 argv/ps，
+# 也不受"ssh 通道比后台进程先关"的时序影响（后者实测让 --token-stdin 拿不到 token）。
+TMPTOK="$SERVER_DIR/.tcm-token"
+S "umask 077 && cat > '$TMPTOK'" <<<"$GH_TOKEN"
+# 注意用 ( ... & ) 子 shell：直接 `a && b && nohup x &` 会把整条链都放后台，
+# 于是后面的 rm/log 与读日志互相抢时序（实测：head 报"文件不存在"）。
+S "cd '$SERVER_DIR' && rm -f tcm-fetch.log && (nohup python3 tcm-fetch-assets.py --repo '$GH_REPO' --tag '$TAG' --dir '$SITE_ROOT/downloads' --token-file '$TMPTOK' > '$SERVER_DIR/tcm-fetch.log' 2>&1 < /dev/null &) ; echo '  后台任务已启动'"
+sleep 6
+say "  日志开头：$(S "head -3 $SERVER_DIR/tcm-fetch.log 2>/dev/null | tr '\n' ' '")"
+say "  看进度：ssh $SERVER 'tail -f $SERVER_DIR/tcm-fetch.log'"
 
 # ── 2) 上传 ────────────────────────────────────────────────────
 step "2/4 上传文件到 $SERVER"
@@ -124,9 +81,8 @@ S "mkdir -p '$SITE_ROOT' '$SITE_ROOT/downloads' '$SERVER_DIR' '$DATA_DIR' '$SSL_
 S "chmod 700 '$DATA_DIR'"
 scp -q -o ConnectTimeout=15 server.mjs "$SERVER:$SERVER_JS"
 scp -q -o ConnectTimeout=15 -r public/. "$SERVER:$SITE_ROOT/"
-scp -q -o ConnectTimeout=15 "$WORK/downloads/"* "$SERVER:$SITE_ROOT/downloads/"
 scp -q -o ConnectTimeout=15 systemd/mingdao-tcm-site.service "$SERVER:$UNIT"
-say "站点文件 / 服务 / 单元 已上传"
+say "站点文件 / 服务 / 单元 已上传（安装包由服务器后台自己拉，见上一步）"
 
 # ── 3) 证书（首次才签） ─────────────────────────────────────────
 step "3/4 证书"
@@ -134,7 +90,8 @@ if S "test -f '$SSL_DIR/$DOMAIN.crt'"; then
   say "证书已存在，跳过签发（续期由 acme.sh 的 cron 负责）"
 else
   say "证书不存在 —— 先只开 80 端口过 ACME 挑战，再上 443"
-  cat > "$WORK/acme-only.conf" <<EOF
+  TMPCONF="$(mktemp)"
+  cat > "$TMPCONF" <<EOF
 server {
     listen 80;
     server_name $DOMAIN;
@@ -142,7 +99,8 @@ server {
     location / { return 503; }
 }
 EOF
-  scp -q -o ConnectTimeout=15 "$WORK/acme-only.conf" "$SERVER:$CONF"
+  scp -q -o ConnectTimeout=15 "$TMPCONF" "$SERVER:$CONF"
+  rm -f "$TMPCONF"
   S "docker exec \$(docker ps --format '{{.Names}}' | grep -i openresty | head -1) openresty -s reload" 2>/dev/null || true
   sleep 1
   # --server letsencrypt：与官网那两张证书**同一个 CA**。
