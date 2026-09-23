@@ -135,6 +135,19 @@ await testAsync('/downloads/<文件> 未登录 → 302 回首页（不能直接�
   assert.equal(r.headers.get('location'), '/');
   jar.tcm_session = saved;
 });
+await testAsync('★ 清单缺失时**报空**，绝不把目录里的半截文件列出来', async () => {
+  // 这条对应一个真实缺陷：早先"清单缺失 → 列目录兜底"，于是正在下载的半截安装包
+  // 也会进下载卡（实测 97MB 的 dmg 只下了 10MB 就被列出）—— 医师下到的是坏包。
+  const mf = path.join(DL, 'manifest.json');
+  const bak = fs.readFileSync(mf, 'utf8');
+  fs.rmSync(mf);
+  try {
+    const r = await req('/api/downloads');
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.deepEqual(j.files, [], '清单不在就应报空，而不是列目录：' + JSON.stringify(j.files));
+  } finally { fs.writeFileSync(mf, bak); }
+});
 await testAsync('登录后能拿到安装包本体，且字节数正确', async () => {
   const r = await req('/downloads/mingdao-tcm-setup-0.9.9-x64.exe');
   assert.equal(r.status, 200);

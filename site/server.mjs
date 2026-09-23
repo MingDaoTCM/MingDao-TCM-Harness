@@ -191,13 +191,12 @@ function downloadManifest() {
     const m = JSON.parse(fs.readFileSync(path.join(DL_DIR, 'manifest.json'), 'utf8'));
     return { ok: true, version: m.version || '', files: Array.isArray(m.files) ? m.files : [] };
   } catch {
-    // 清单还没生成（deploy.sh 会生成）——列目录兜底，至少别让页面空着
-    try {
-      const files = fs.readdirSync(DL_DIR)
-        .filter((f) => /\.(exe|dmg|zip|AppImage|deb)$/i.test(f))
-        .map((f) => ({ name: f, size: fs.statSync(path.join(DL_DIR, f)).size }));
-      return { ok: true, version: '', files };
-    } catch { return { ok: true, version: '', files: [] }; }
+    // 清单还没生成（正在拉包 / CI 还没推完）→ **就报空**。
+    //
+    // 早先这里有个"列目录兜底"，结果把**正在下载的半截文件**也列进了下载卡
+    // （实测：97MB 的 dmg 只下了 10MB 就被列出来，点下载拿到的是坏包）。
+    // 让页面显示"尚未上传"远好过让医师下载一个装不上的安装包。
+    return { ok: true, version: '', files: [] };
   }
 }
 function serveDownload(req, res, name) {
