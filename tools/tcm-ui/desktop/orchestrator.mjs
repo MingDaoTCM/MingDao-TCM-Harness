@@ -9,10 +9,27 @@
 // 这里打开的是本项目的问诊台（带患者名册/随访提醒的那个独立前端）。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const APP_NAME = '明道中医 · 问诊台';
+
+/**
+ * 桌面版的数据目录覆盖 —— 给 **GUI** 用的：给一个窗口应用设环境变量太别扭
+ * （启动器、桌面项、双击图标各有各的传参方式，用户多半设不上）。
+ *
+ *   ~/.mingdao-tcm-desktop.json   →   { "home": "/home/you/.mingdao-tcm" }
+ *
+ * 读不到 / 不是合法 JSON / 字段不对 → 空串，交给后面的优先级继续兜。
+ */
+export function desktopConfigHome() {
+  try {
+    const p = path.join(os.homedir(), '.mingdao-tcm-desktop.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return typeof j?.home === 'string' ? j.home.trim() : '';
+  } catch { return ''; }
+}
 
 /**
  * 应用根目录（其下应有 `layer/` 与 `tools/tcm-ui/`）。
@@ -59,16 +76,33 @@ export async function startApp(opts = {}) {
     throw new Error('找不到 MingDao-Harness 内核检出：设 MINGDAO_KERNEL，或把内核放进打包产物的 resources/kernel');
   }
   const host = String(opts.host || '127.0.0.1');
-  const home = String(opts.home || process.env.MINGDAO_HOME || '').trim();
 
   // ① 内核 WebUI：随机端口，被占用就换（与内核 desktop/ 同一套做法）
   const serverMod = await import(pathToFileURL(path.join(kernelRoot, 'src', 'web', 'server.js')).href);
+  let cfgMod = null;
+  try { cfgMod = await import(pathToFileURL(path.join(kernelRoot, 'src', 'config.js')).href); } catch { /* 老内核没这个模块也不该挡住启动 */ }
+
+  // ── 数据目录：**以内核自己的解析为准**，界面复用同一个值 ──────────────────
+  // 为什么不能各算一次：内核用的是 `process.env.MINGDAO_HOME || ~/.mingdao`
+  // （src/config.js 的 mingdaoHome）。而桌面版里 MINGDAO_HOME **通常是空的** ——
+  // 于是内核用 ~/.mingdao，界面却拿到空串 → 名册/提醒直接报「未配置数据目录」。
+  // 这个组合在命令行下恰好不出现（启动脚本会设 MINGDAO_HOME），所以本机与单测都没暴露，
+  // 是 2026-09-23 用户装上桌面版才照出来的。收口办法：向内核要它解析的结果。
+  //
+  // 优先级：显式传入 > MINGDAO_HOME 环境变量 > 桌面版配置文件 > 内核默认。
+  const home = String(
+    opts.home
+    || process.env.MINGDAO_HOME
+    || desktopConfigHome()
+    || (typeof cfgMod?.mingdaoHome === 'function' ? cfgMod.mingdaoHome() : '')
+    || '',
+  ).trim();
+  if (!home) throw new Error('解析不出数据目录（MINGDAO_HOME / 桌面版配置 / 内核 mingdaoHome()）——界面将读不到患者数据');
+
   // 首启自检：没有 config.json 时让内核建一份最小可用的，
   // 否则桌面版第一次打开会直接报「配置缺失」——正是我们要消灭的「先跑终端」那一步。
-  try {
-    const cfgMod = await import(pathToFileURL(path.join(kernelRoot, 'src', 'config.js')).href);
-    cfgMod.ensureMinimalConfig?.();
-  } catch { /* 老内核没有这个导出也不该挡住启动 */ }
+  try { cfgMod?.ensureMinimalConfig?.(); } catch { /* 建不出来也不该挡住窗口 */ }
+
   const authToken = crypto.randomBytes(16).toString('hex');
   let kernelPort = 0;
   for (let attempt = 0; attempt < 6 && !kernelPort; attempt++) {
@@ -99,6 +133,7 @@ export async function startApp(opts = {}) {
   return {
     appRoot,
     kernelRoot,
+    home,
     kernelPort,
     kernelUrl: `http://${host}:${kernelPort}`,
     uiUrl: ui.url,

@@ -98,6 +98,32 @@ await testAsync('★ 转发链路可用：/api/state 经代理打到内核（tok
   const j = await r.json();
   assert.equal(j.ok, true, '内核返回的 state 应是 ok:true');
 });
+// ★ 这条对应**用户实测报回来的缺陷**（2026-09-23 装上桌面版就看到「未配置数据目录」）：
+//   桌面版里 MINGDAO_HOME **是空的**（命令行下启动脚本会设它，所以本机与原来的单测都没暴露），
+//   于是「内核用 ~/.mingdao、界面拿到空串」。修法是向内核要它解析的结果；这条把那个组合钉住。
+await testAsync('★ MINGDAO_HOME 为空时，也必须把内核解析出的数据目录交给界面', async () => {
+  const savedHome = process.env.HOME;
+  const savedMh = process.env.MINGDAO_HOME;
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-fake-home-'));
+  process.env.HOME = fakeHome;      // mingdaoHome() 走 os.homedir()，POSIX 上就是 $HOME
+  delete process.env.MINGDAO_HOME;  // ← 桌面版的真实情况：这个变量根本没设
+  /** @type {any} */
+  let app2 = null;
+  try {
+    app2 = await startApp({ appRoot: REPO, kernelRoot: KERNEL, uiPort: 0, quiet: true });
+    assert.equal(app2.home, path.join(fakeHome, '.mingdao'), '界面拿到的主目录必须与内核解析的一致');
+    const r = await fetch(app2.uiUrl + 'api/tcm/reminders');
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.ok, true, '不能是「未配置数据目录」：' + JSON.stringify(j));
+    assert.ok(j.counts, '应返回提醒计数（哪怕是 0）');
+  } finally {
+    if (app2) await app2.close();
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    if (savedMh !== undefined) process.env.MINGDAO_HOME = savedMh;
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+  }
+});
 await testAsync('界面静态资源可用（打开的就是这个前端）', async () => {
   const r = await fetch(app.uiUrl);
   assert.equal(r.status, 200);
