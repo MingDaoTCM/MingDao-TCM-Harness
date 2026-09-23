@@ -60,6 +60,19 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/downloads"
 
+# Release 刚创建时资产可能还没挂上 —— 2026-09-23 实测踩到：CI 建完 Release 的**同一分钟**跑部署，
+# 查到 0 个资产、脚本却一路走完，最后上传了个空的下载区（页面上"清单为空"）。所以先等就绪再拉。
+N=0
+for i in $(seq 1 12); do
+  N="$(curl -s -m 30 -H "Authorization: Bearer $GH_TOKEN" \
+    "https://api.github.com/repos/$GH_REPO/releases/tags/$TAG" \
+    | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("assets",[])))' 2>/dev/null || echo 0)"
+  [ "${N:-0}" -gt 0 ] && break
+  say "  Release 资产尚未就绪（第 $i/12 次，等 6s）…"
+  sleep 6
+done
+[ "${N:-0}" -gt 0 ] || die "Release $TAG 没有任何安装包资产（CI 的 publish 作业是否失败？）"
+
 python3 - "$GH_TOKEN" "$GH_REPO" "$TAG" "$WORK" <<'PY'
 import json, sys, os, urllib.request
 token, repo, tag, work = sys.argv[1:5]
@@ -96,12 +109,14 @@ for n in sorted(os.listdir(d)):
     if not n.endswith((".exe", ".dmg", ".zip", ".AppImage", ".deb")):
         continue
     p = os.path.join(d, n)
-    files.append({"name": n, "size": os.path.getsize(p), "sha256": sha256(p)})
-json.dump({"version": ver, "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "files": files},
+    files.append({"name": n, "size": os.path.getsize(p), "sha256": sha256(p)})json.dump({"version": ver, "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "files": files},
           open(os.path.join(d, "manifest.json"), "w"), ensure_ascii=False, indent=2)
 print(f"    manifest.json：{len(files)} 个文件")
 PY
-[ -s "$WORK/downloads/manifest.json" ] || die "安装包为空 —— Release 里没有可发布的资产？"
+# 0 个文件必须**当场失败**：否则会安静地上传一个空的下载区（页面显示"清单为空"），
+# 而脚本一路绿 —— 2026-09-23 就是这么把空下载区发上去的。
+NFILES="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["files"]))' "$WORK/downloads/manifest.json" 2>/dev/null || echo 0)"
+[ "${NFILES:-0}" -gt 0 ] || die "安装包清单是空的（0 个文件）—— 不要继续部署"
 
 # ── 2) 上传 ────────────────────────────────────────────────────
 step "2/4 上传文件到 $SERVER"
@@ -130,7 +145,9 @@ EOF
   scp -q -o ConnectTimeout=15 "$WORK/acme-only.conf" "$SERVER:$CONF"
   S "docker exec \$(docker ps --format '{{.Names}}' | grep -i openresty | head -1) openresty -s reload" 2>/dev/null || true
   sleep 1
-  S "~/.acme.sh/acme.sh --issue -d '$DOMAIN' --webroot '$ACME_WEBROOT' --keylength ec-256" \
+  # --server letsencrypt：与官网那两张证书**同一个 CA**。
+  # acme.sh 现在默认 ZeroSSL，会先要邮箱/EAB 凭据（首次部署实测就卡在这）。
+  S "~/.acme.sh/acme.sh --issue -d '$DOMAIN' --webroot '$ACME_WEBROOT' --keylength ec-256 --server letsencrypt" \
     || die "acme.sh 签发失败（DNS 是否已指向本机？80 端口是否可达？）"
   S "~/.acme.sh/acme.sh --install-cert -d '$DOMAIN' --ecc \
        --key-file '$SSL_DIR/$DOMAIN.key' --fullchain-file '$SSL_DIR/$DOMAIN.crt' --reloadcmd 'true'"

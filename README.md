@@ -82,9 +82,12 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 
 ## 与上游的版本关系
 
-- 本层当前对齐 **MingDao-Harness v0.6.5**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
-- 已在 v0.6.5 内核下验证：`pack verify`（静态）、`pack.test.mjs`（50 项）、`integration.test.mjs`（11 项）、`dify.test.mjs`（17 项）**全部通过**；
-  v0.6.5 唯一与 Pack 相关的行为变更（未信任的**项目级** Pack，`pack info` 不再执行其代码）**不影响本层**——本层 Pack 装在**用户级** `$MINGDAO_HOME/packs/`，本就不受项目级信任门约束（实测 `pack info tcm` 正常）；
+- 本层当前对齐 **MingDao-Harness v0.6.6**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
+- 已在 v0.6.6 内核下验证全部 8 档门禁：`pack verify`（静态）、`pack.test.mjs`（52 项）、
+  `integration.test.mjs`（11 项）、`dify.test.mjs`（17 项）、`tcm-data`（14 项）、`ui-wiring`（7 项）、
+  `desktop-orchestrator`（15 项）、`site`（19 项）**全部通过，无代码改动**；
+  v0.6.6 只是 release + Windows 测试门禁修复（未触及 packs / constraints / providers / permissions，
+  见 `v0.6.5..v0.6.6` 的 diff）；
 - 接入的扩展点：垂域 **Pack（Pack API v1：tools / constraints / promptSections）** + 自定义 **Provider（dify.mjs，含 `supportsVision`）**；
 - 内核升级后如扩展点有变，本层适配后再跟版本；
 - **内核 bug 在上游修，本层不重复造**。
