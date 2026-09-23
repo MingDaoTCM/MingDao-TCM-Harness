@@ -82,11 +82,13 @@ def download(url, token, dst):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--repo', required=True)
+    ap.add_argument('--repo', default='', help='owner/name；--manifest-only 时不需要')
     ap.add_argument('--tag', required=True)
     ap.add_argument('--dir', required=True)
     ap.add_argument('--token-stdin', action='store_true')
     ap.add_argument('--token-file', help='读这个文件里的 token，**读完立即 unlink**')
+    ap.add_argument('--manifest-only', action='store_true',
+                    help='不下载，只按当前 downloads/ 目录里的文件重算 manifest.json（CI 推完包后跑这个）')
     a = ap.parse_args()
     if a.token_file:
         # 为什么要这个：`nohup ... --token-stdin &` 时 ssh 通道会立刻关闭，
@@ -102,9 +104,35 @@ def main():
         token = sys.stdin.read().strip()
     else:
         token = os.environ.get('GH_TOKEN', '')
-    if not token:
+    if not token and not a.manifest_only:  # --manifest-only 只算哈希，不需要 token
         raise SystemExit('缺少 token（--token-file / --token-stdin / GH_TOKEN）')
 
+    def main_manifest_only(tag, d):
+        files = []
+        for n in sorted(os.listdir(d)):
+            if not n.endswith(KEEP):
+                continue
+            p = os.path.join(d, n)
+            files.append({'name': n, 'size': os.path.getsize(p), 'sha256': sha256(p)})
+        if not files:
+            raise SystemExit('downloads/ 里没有安装包，拒绝写空清单')
+        manifest = {
+            'version': tag.lstrip('v'),
+            'generatedAt': datetime.datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+            'files': files,
+        }
+        tmp = os.path.join(d, '.manifest.json.tmp')
+        with open(tmp, 'w') as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, os.path.join(d, 'manifest.json'))
+        print('  ✓ manifest.json 已重算（%d 个文件）' % len(files), flush=True)
+
+    if a.manifest_only:
+        main_manifest_only(a.tag, a.dir)
+        return
+
+    if not a.repo:
+        raise SystemExit('缺少 --repo（owner/name）')
     os.makedirs(a.dir, exist_ok=True)
     rel = json.load(api('https://api.github.com/repos/%s/releases/tags/%s' % (a.repo, a.tag), token))
     assets = [x for x in rel.get('assets', []) if x['name'].endswith(KEEP)]

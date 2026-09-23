@@ -136,6 +136,40 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      # ── 把安装包推给站点服务器 ──────────────────────────────────────────
+      # 为什么在 CI 推、而不是让服务器自己从 GitHub 拉：
+      #   实测 2026-09-23 —— 站点服务器（国内）拉 GitHub 只有 ~7–10KB/s（突发才到 100KB/s），
+      #   520MB 要十几小时；而 runner 在美西，拉 GitHub 极快，推给服务器也快得多。
+      # 需要你配：仓库 Secret `TCM_DEPLOY_SSH_KEY`（能登录站点服务器的私钥）；
+      #   可选 Variable `TCM_DEPLOY_TARGET`（默认 root@8.210.103.117）。
+      # **没配就跳过** —— 发版照常成功，站点侧随时可用 `bash site/deploy.sh` 补。
+      - name: 推安装包到站点服务器（未配 Secret 则跳过）
+        env:
+          TCM_SSH_KEY: ${{ secrets.TCM_DEPLOY_SSH_KEY }}
+          TCM_TARGET: ${{ vars.TCM_DEPLOY_TARGET }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TCM_SSH_KEY:-}" ]; then
+            echo "::notice title=skip::未配置 TCM_DEPLOY_SSH_KEY，跳过推包（站点可用 site/deploy.sh 补）"
+            exit 0
+          fi
+          TARGET="${TCM_TARGET:-root@8.210.103.117}"
+          HOST="${TARGET#*@}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$TCM_SSH_KEY" > ~/.ssh/id_tcm && chmod 600 ~/.ssh/id_tcm
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          SSHOPT="-i $HOME/.ssh/id_tcm -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
+          timeout 60 ssh $SSHOPT "$TARGET" 'mkdir -p /opt/1panel/www/sites/tcm-site/downloads'
+          # artifacts 按平台分在子目录里，这里把安装包本体展平上传
+          timeout 1200 rsync -a --info=stats2 -e "ssh $SSHOPT" \
+            --include='*/' --include='*.exe' --include='*.dmg' --include='*.zip' \
+            --include='*.AppImage' --include='*.deb' --exclude='*' \
+            artifacts/ "$TARGET:/opt/1panel/www/sites/tcm-site/downloads/"
+          # 传完让**服务器自己**重算 manifest.json（sha256/大小由服务器算，避免两边不一致）
+          scp -q $SSHOPT site/fetch-assets.py "$TARGET:/opt/mingdao/tcm-fetch-assets.py"
+          ssh $SSHOPT "$TARGET" "python3 /opt/mingdao/tcm-fetch-assets.py --tag '${{ github.ref_name }}' --dir /opt/1panel/www/sites/tcm-site/downloads --manifest-only"
+
       - name: 发布到 GitHub Release（清空旧资产后整批覆盖）
         env:
           GH_TOKEN: ${{ github.token }}
