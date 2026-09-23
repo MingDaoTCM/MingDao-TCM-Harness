@@ -422,7 +422,12 @@ export function createPack(ctx) {
     if (m.isNew) {
       return {
         ok: true,
-        output: `未找到既有患者「${info.name}」${info.birth ? `（${info.birth}年生）` : ''}，按**首诊**处理（病历号将在采集落盘时分配）。`,
+        // 明确写出**下一步**：编排器看得到工具结果，但"未找到患者"这句话本身
+        // 并不足以让它接着建号落盘 —— 2026-09-23 实测过，它查到"首诊"就停了，
+        // 于是这次就诊没落盘、下次复诊又被判首诊。把动作写进结果里，别指望它自己推。
+        output: `未找到既有患者「${info.name}」${info.birth ? `（${info.birth}年生）` : ''}，本次按**首诊**处理。`
+          + `\n→ 下一步（必须做完）：调用 patient_register 建号，再调用 intake_collect 落盘本次病历。`
+          + `只做 patient_lookup 等于这次就诊丢失，下次复诊会被当成首诊。`,
         data: { status: 'new', name: info.name, birth: info.birth, sex: info.sex },
       };
     }

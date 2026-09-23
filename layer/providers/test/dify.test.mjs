@@ -125,6 +125,29 @@ await testAsync('① 判定要调工具 → 交回 toolCalls，且**不调用 Di
   assert.equal(calls.filter((c) => c.url.includes('/chat-messages')).length, 0, '判定要调工具时不该再问 Dify');
 });
 
+// ★ 对应 2026-09-23 用户报的「无落盘、同一患者复诊仍按初诊」：
+//   编排器查到「未找到既有患者」就停了，没接着 patient_register + intake_collect，
+//   于是这次就诊丢失、下次复诊又被判首诊（病历断链）。
+//   根因是 DECIDE_SYSTEM 把落盘写成了「典型情形」之一，与「该由问诊工作流回答」并列 ——
+//   模型完全可以理解成"这轮交给工作流，不用落盘"。这条断言把发出去的提示钉住：
+//   落盘必须是**硬性流程**，且明确禁止停在 patient_lookup。
+await testAsync('★ 编排提示必须把「落盘」写成硬性流程，并明确禁止停在 patient_lookup', async () => {
+  writeCreds({ dify: 'app-t', deepseek: 'sk-t' });
+  clearConfig();
+  const calls = installFetch({ decider: 'continue' });
+  const p = createProvider({ name: 'dify', baseUrl: 'https://dify.example.com' });
+  await p.chat({ messages: userMessages(), tools: TOOLS });
+  const dc = calls.find((c) => c.url.includes('/chat/completions') && Array.isArray(c.body?.tools));
+  assert.ok(dc, '应发出一次带 tools 的判定请求');
+  const sys = String(dc.body.messages?.[0]?.content || '');
+  assert.match(sys, /硬性流程/, '落盘必须写明是硬性流程，不能只是「典型情形」之一');
+  for (const t of ['patient_lookup', 'patient_register', 'intake_collect']) {
+    assert.ok(sys.includes(t), `编排提示必须点出 ${t}（否则模型不知道有这一步）`);
+  }
+  assert.match(sys, /绝不要停在\s*patient_lookup/, '必须明确禁止停在 lookup');
+  assert.match(sys, /病历断链|就诊丢失/, '必须说清停在 lookup 的后果');
+});
+
 await testAsync('② 判定说「继续」→ 走 Dify，且 query 带「本次第几次就诊 + 上次病历」', async () => {
   writeCreds({ dify: 'app-t', deepseek: 'sk-t' });
   clearConfig();

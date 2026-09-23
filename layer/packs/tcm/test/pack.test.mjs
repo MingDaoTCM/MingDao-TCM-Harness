@@ -273,6 +273,19 @@ await testAsync('patient_lookup：空库里的一手资料 → new（不建人�
   assert.ok(!fs.existsSync(path.join(TMP_HOME, 'patients.json')), '只读工具不得写注册表');
 });
 
+// ★ 2026-09-23 用户报「无落盘、复诊当初诊」：编排器查到"未找到既有患者"就停了，
+//   没接着建号落盘。工具结果里必须直接把**下一步动作**写出来 ——
+//   编排器看得到结果，但"未找到患者"这句话本身不足以让它接着做。
+await testAsync('★ patient_lookup 结果为 new 时必须写明下一步（register → intake_collect）', async () => {
+  const r = await tool('patient_lookup').run({ text: '患者张三，1985年生，女，失眠多梦' },
+    stub({ 'patient-extract': { id: '', name: '张三', birth: '1985', sex: '女' } }));
+  assert.equal(r.data.status, 'new');
+  assert.match(r.output, /下一步/, '必须给出下一步，而不是只报告"未找到"');
+  assert.ok(r.output.includes('patient_register'), '必须点出 patient_register');
+  assert.ok(r.output.includes('intake_collect'), '必须点出 intake_collect');
+  assert.match(r.output, /丢失|断链|当成首诊|判成首诊/, '必须说清不落盘的后果');
+});
+
 await testAsync('intake_collect：病历号不存在 → 拒绝落盘', async () => {
   const r = await tool('intake_collect').run({ patientId: 'P999', consultText: '主诉失眠' }, stub({}));
   assert.equal(r.ok, false);
