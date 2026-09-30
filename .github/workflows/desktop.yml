@@ -118,64 +118,29 @@ jobs:
       # 实测一次发版 ~3.6GB，几条腿跑下来把配额撑爆，四条腿全挂在 upload-artifact、
       # publish 被 skip（报 `Artifact storage quota has been hit`）。改成每条腿自己推，
       # 顺带把"跑完五条腿才发版"变成"每条腿落地即发布"。
-      - name: 发布本平台安装包（Release 优先，站点随后）
+      # 构建腿**只发 GitHub Release**（GitHub 内部传输很快、不会超时）。
+      # 站点推送挪到 publish 作业、**单条流串行**：2026-09-30 实测四条腿同时往站点推，
+      # 把服务器那条 ~100KB/s 的窄带打满，SSH 直接 `Connection reset by peer`（退出码 255）。
+      # 单条流才不会互相挤（v0.1.5 能成功，正是因为当时推送在单独的 publish 作业里）。
+      - name: 发本平台安装包到 GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        # 站点服务器上行只有 50–100KB/s（上游脚本里写明的），mac 腿近 300MB —— 30 分钟不够，
-        # 实测三条腿卡在超时。放宽到 120 分钟；即便如此，**Release 也放在前面先发**（见下）。
-        timeout-minutes: 120
+        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ github.token }}
-          TCM_SSH_KEY: ${{ secrets.TCM_DEPLOY_SSH_KEY }}
-          TCM_TARGET: ${{ vars.TCM_DEPLOY_TARGET }}
         shell: bash
         run: |
           set -uo pipefail
           cd tcm/tools/tcm-ui/desktop/dist
-          # 用 mapfile 按行读（mac zip 文件名含空格），并**排除 `._*`**：
-          # macOS 打包会留下 AppleDouble 资源叉文件（`._xxx.dmg`），它们同样以 .dmg 结尾，
-          # 混进产物后被推到站点、进了清单，页面上就多出两个 0.0MB 的按钮。
-          # ⚠ 不用 mapfile：macOS runner 自带 bash 3.2，没有 mapfile（实测退出码 127）。
-          # 用 while read + 数组追加，3.2 也认；顺便排除 macOS 的 AppleDouble 垃圾（._xxx.dmg）。
+          # 不用 mapfile：macOS runner 是 bash 3.2。排除 macOS 的 AppleDouble 垃圾（._xxx.dmg）。
           FILES=()
           while IFS= read -r f; do FILES+=("$f"); done < <(ls -1 *.AppImage *.deb *.exe *.dmg *.zip 2>/dev/null | grep -v '^\._' | sort -u)
           if [ "${#FILES[@]}" -eq 0 ]; then echo "::error title=no-artifacts::本腿没有产物"; exit 1; fi
           echo "本腿产物："; printf '  %s\n' "${FILES[@]}"
-
-          # ① GitHub Release：**先发这个**（GitHub 内部传输很快）。
-          #    放在站点推送之前，是因为站点上传受服务器带宽限制、可能超时 ——
-          #    那样至少 Release 是完整可下载的，不会像 v0.1.6 那样三条腿超时后连 Release 都没建。
           REPO="$GITHUB_REPOSITORY"; TAG="$GITHUB_REF_NAME"
           gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 \
             || gh release create "$TAG" -R "$REPO" --generate-notes --title "$TAG" >/dev/null 2>&1 || true
           gh release upload "$TAG" "${FILES[@]}" -R "$REPO" --clobber
           echo "  已上传 Release"
-
-          # ② 站点：tar 经 ssh（目标机**没装 rsync**；--null 保住含空格的文件名）。
-          #    跳过 .zip：它们是给自动更新用的，页面按 dmg/exe/deb/AppImage 展示，不显示 zip ——
-          #    白占 180MB 的慢带宽。zip 仍然在 GitHub Release 里。
-          SITE_FILES=()
-          for f in "${FILES[@]}"; do case "$f" in *.zip) ;; *) SITE_FILES+=("$f");; esac; done
-          if [ -n "${TCM_SSH_KEY:-}" ]; then
-            TARGET="${TCM_TARGET:-root@8.210.103.117}"
-            HOST="${TARGET#*@}"
-            mkdir -p ~/.ssh && chmod 700 ~/.ssh
-            printf '%s\n' "$TCM_SSH_KEY" > ~/.ssh/id_tcm && chmod 600 ~/.ssh/id_tcm
-            ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-            SSHOPT="-i $HOME/.ssh/id_tcm -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
-            ssh $SSHOPT "$TARGET" 'mkdir -p /opt/1panel/www/sites/tcm-site/downloads'
-            # 清掉其它版本：find -delete 不经 shell 分词（空格文件名曾让 rm 静默失败）；
-            # 匹配用**去掉 v 的版本号**且两端带 '-'（产物名里没有 v，按 tag 匹配一个都对不上）。
-            VER="${GITHUB_REF_NAME#v}"
-            ssh $SSHOPT "$TARGET" "cd /opt/1panel/www/sites/tcm-site/downloads && find . -maxdepth 1 -type f \\( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \\) ! -name '*-'$VER'-*' -delete ; rm -f manifest.json ; true"
-            printf '%s\0' "${SITE_FILES[@]}" | tar -cf - --null --files-from=- | ssh $SSHOPT "$TARGET" 'tar -xf - -C /opt/1panel/www/sites/tcm-site/downloads/'
-            echo "  已推送站点"
-            scp -q $SSHOPT "$GITHUB_WORKSPACE/tcm/site/fetch-assets.py" "$TARGET:/opt/mingdao/tcm-fetch-assets.py" || true
-            ssh $SSHOPT "$TARGET" "python3 /opt/mingdao/tcm-fetch-assets.py --tag '$GITHUB_REF_NAME' --dir /opt/1panel/www/sites/tcm-site/downloads --manifest-only" || true
-          else
-            echo "::notice title=skip::未配置 TCM_DEPLOY_SSH_KEY，跳过站点推送（可用 site/deploy.sh 补）"
-          fi
-
-
 
   # 汇总校验：四条腿各自发布完之后，确认 Release 资产齐、站点清单是终态。
   # 这里**不需要工件**（那正是被配额打挂的东西），只看两边落地结果。
@@ -184,27 +149,50 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: 校验发版结果（Release 资产 + 站点清单）
+      - uses: actions/checkout@v4
+
+      - name: 推站点（单条流）+ 校验
+        timeout-minutes: 150
         env:
           GH_TOKEN: ${{ github.token }}
           TCM_SSH_KEY: ${{ secrets.TCM_DEPLOY_SSH_KEY }}
           TCM_TARGET: ${{ vars.TCM_DEPLOY_TARGET }}
+        shell: bash
         run: |
           set -uo pipefail
-          TAG="$GITHUB_REF_NAME"
-          echo "Release 资产："
-          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sed 's/^/  /'
-          N=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets|length')
-          echo "  共 $N 个"
-          [ "$N" -ge 5 ] || { echo "::error title=release-assets::Release 资产过少（$N 个），某条腿没上传成功"; exit 1; }
+          TAG="$GITHUB_REF_NAME"; REPO="$GITHUB_REPOSITORY"
+
+          # ① 校验 Release 资产（构建腿的唯一职责）
+          gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name' | sed 's/^/  /'
+          N=$(gh release view "$TAG" -R "$REPO" --json assets -q '.assets|length')
+          echo "  Release 资产共 $N 个"
+          [ "$N" -ge 5 ] || { echo "::error title=release-assets::Release 资产过少（$N 个）"; exit 1; }
+
           if [ -z "${TCM_SSH_KEY:-}" ]; then
-            echo "::notice::未配置 TCM_DEPLOY_SSH_KEY，跳过站点校验"; exit 0
+            echo "::notice::未配置 TCM_DEPLOY_SSH_KEY，跳过站点推送（可用 site/deploy.sh 补）"; exit 0
           fi
+
+          # ② 从 Release 下载（GitHub → runner 很快，不占工件配额），**一条流**推到站点
+          DL="$(mktemp -d)"
+          gh release download "$TAG" -R "$REPO" -D "$DL"
+          rm -f "$DL"/*.yml "$DL"/*.blockmap 2>/dev/null || true
+          # 页面只按 dmg/exe/deb/AppImage 展示；zip 是自动更新用的，白占慢带宽（仍在 Release 里）
+          SITE_FILES=()
+          while IFS= read -r f; do case "$f" in *.zip) ;; *) SITE_FILES+=("$f");; esac; done < <(ls -1 "$DL" | sort)
+          printf '  推站点：\n'; printf '    %s\n' "${SITE_FILES[@]}"
+
           TARGET="${TCM_TARGET:-root@8.210.103.117}"; HOST="${TARGET#*@}"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$TCM_SSH_KEY" > ~/.ssh/id_tcm && chmod 600 ~/.ssh/id_tcm
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-          SSHOPT="-i $HOME/.ssh/id_tcm -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
+          SSHOPT="-i $HOME/.ssh/id_tcm -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=30"
+          ssh $SSHOPT "$TARGET" 'mkdir -p /opt/1panel/www/sites/tcm-site/downloads'
+          # 清掉其它版本（find -delete 不经 shell 分词；产物名里没有 v，故用去 v 的版本号两端带 '-' 匹配）
+          VER="${TAG#v}"
+          ssh $SSHOPT "$TARGET" "cd /opt/1panel/www/sites/tcm-site/downloads && find . -maxdepth 1 -type f \\( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \\) ! -name '*-'$VER'-*' -delete ; rm -f manifest.json ; true"
+          ( cd "$DL" && printf '%s\0' "${SITE_FILES[@]}" | tar -cf - --null --files-from=- ) \
+            | ssh $SSHOPT "$TARGET" 'tar -xf - -C /opt/1panel/www/sites/tcm-site/downloads/ && ls -la /opt/1panel/www/sites/tcm-site/downloads/ | tail -9'
+          # 让**服务器自己**重算 manifest（sha256/大小由服务器算，避免两边口径不一）
+          scp -q $SSHOPT site/fetch-assets.py "$TARGET:/opt/mingdao/tcm-fetch-assets.py"
           ssh $SSHOPT "$TARGET" "python3 /opt/mingdao/tcm-fetch-assets.py --tag '$TAG' --dir /opt/1panel/www/sites/tcm-site/downloads --manifest-only"
-          ssh $SSHOPT "$TARGET" "cat /opt/1panel/www/sites/tcm-site/downloads/manifest.json" | head -20 | sed 's/^/  /'
           echo "站点版本端点："; curl -s -m 20 "https://tcm.mingdao.ai/api/latest" | sed 's/^/  /'
