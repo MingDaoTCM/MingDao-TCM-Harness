@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveAppRoot, resolveKernelRoot, startApp } from '../desktop/orchestrator.mjs';
+import { resolveAppRoot, resolveKernelRoot, startApp, versionGt, checkForUpdate } from '../desktop/orchestrator.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.resolve(HERE, '..');
@@ -98,6 +98,43 @@ await testAsync('★ 转发链路可用：/api/state 经代理打到内核（tok
   const j = await r.json();
   assert.equal(j.ok, true, '内核返回的 state 应是 ok:true');
 });
+// ★ 2026-09-24 用户报「似乎没有调用 Dify 工作流」。根因：内核只从 $MINGDAO_HOME/{packs,providers}
+//   加载扩展，而打包产物把它们放在 resources/app/layer/... —— 此前**没有任何一步做安装**，
+//   干净机器上打开桌面版得到的是裸内核：没有 tcm 工具、没有 dify provider、provider 还是 deepseek。
+//   这条断言把「首启必须把垂域层装进 home，并把 provider 指向 Dify」钉住。
+await testAsync('★ 全新 home：必须装上 Pack/Provider，并让内核真的挂载 tcm、问诊走 Dify', async () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-fresh-home-'));
+  /** @type {any} */
+  let app2 = null;
+  const captured = [];
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origErr = console.error;
+  // 内核把"已加载垂域 Pack"打在 **console.error** 上（src/web/server.js），横幅打在 stdout —— 三个都截
+  console.log = (...a) => { captured.push(a.map(String).join(' ')); };
+  console.warn = (...a) => { captured.push(a.map(String).join(' ')); };
+  console.error = (...a) => { captured.push(a.map(String).join(' ')); };
+  try {
+    app2 = await startApp({ appRoot: REPO, kernelRoot: KERNEL, home: fresh, uiPort: 0, quiet: true });
+  } finally { console.log = origLog; console.warn = origWarn; console.error = origErr; }
+  try {
+    assert.ok(fs.existsSync(path.join(fresh, 'packs', 'tcm', 'pack.mjs')), '必须把打包的 tcm Pack 装进 home');
+    assert.ok(fs.existsSync(path.join(fresh, 'providers', 'dify.mjs')), '必须把 dify provider 装进 home');
+    assert.equal(app2.layer.pack, '已安装');
+    assert.equal(app2.layer.provider, '已安装');
+    const cfg = JSON.parse(fs.readFileSync(path.join(fresh, 'config.json'), 'utf8'));
+    assert.equal(cfg.provider, 'dify', '问诊必须走 Dify 工作流（路线 A），不能停在 deepseek 直连');
+    assert.equal(cfg.model, 'dify-chatflow');
+    assert.ok(!('baseUrl' in cfg), '顶层 baseUrl 会压过 Dify 端点（provider 源码明说不要写）——必须删掉');
+    // 只验"文件在盘上"不够：要内核**真的挂载**了它
+    assert.ok(captured.some((l) => /已加载垂域 Pack.*\btcm\b/.test(l)),
+      '内核应挂载 tcm Pack；实际日志：' + captured.join(' | ').slice(0, 300));
+  } finally {
+    if (app2) await app2.close();
+    fs.rmSync(fresh, { recursive: true, force: true });
+  }
+});
+
 // ★ 这条对应**用户实测报回来的缺陷**（2026-09-23 装上桌面版就看到「未配置数据目录」）：
 //   桌面版里 MINGDAO_HOME **是空的**（命令行下启动脚本会设它，所以本机与原来的单测都没暴露），
 //   于是「内核用 ~/.mingdao、界面拿到空串」。修法是向内核要它解析的结果；这条把那个组合钉住。
@@ -172,6 +209,35 @@ await testAsync('electron-builder.yml：内核与问诊台都被 extraResources 
   assert.ok(/to:\s*app\b/.test(y), '问诊台与 layer 要落到 resources/app（保持相对布局）');
   assert.ok(/to:\s*kernel\b/.test(y), '内核要落到 resources/kernel');
   assert.ok(/npmmirror|mirror/.test(y), '国内下载 electron 需要镜像（照抄内核 desktop 的做法）');
+});
+
+// ── 桌面版「帮助 → 检查更新」的逻辑（放在纯 Node 层就是为了能在这里测）──
+await testAsync('★ 版本比较：必须按数字比，不能按字符串比', () => {
+  assert.equal(versionGt('0.1.5', '0.1.4'), true);
+  assert.equal(versionGt('0.2.0', '0.1.9'), true);
+  assert.equal(versionGt('1.0.0', '0.9.9'), true);
+  assert.equal(versionGt('0.1.4', '0.1.4'), false);
+  assert.equal(versionGt('0.1.3', '0.1.4'), false);
+  assert.equal(versionGt('v0.1.5', '0.1.4'), true, '带 v 前缀也要认');
+  // 字符串比较会得出 "0.1.10" < "0.1.9" —— 这正是要数字比的原因
+  assert.equal(versionGt('0.1.10', '0.1.9'), true);
+  assert.equal(versionGt('', '0.1.4'), false);
+});
+await testAsync('★ 检查更新：四种结果都有明确答案，且**永不抛错**（点了没反应比查不到更糟）', async () => {
+  const ok = (body) => async () => ({ ok: true, status: 200, json: async () => body });
+  assert.equal((await checkForUpdate({ siteUrl: 'https://s', current: '0.1.4', fetchImpl: ok({ version: '0.1.5' }) })).status, 'newer');
+  assert.equal((await checkForUpdate({ siteUrl: 'https://s', current: '0.1.4', fetchImpl: ok({ version: '0.1.4' }) })).status, 'current');
+  assert.equal((await checkForUpdate({ siteUrl: 'https://s', current: '0.1.4', fetchImpl: ok({ version: '0.1.3' }) })).status, 'current', '站点比本机旧也算已最新');
+  const http = await checkForUpdate({ siteUrl: 'https://s', current: '0.1.4', fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }) });
+  assert.equal(http.status, 'unknown');
+  assert.match(http.reason, /500/, 'HTTP 失败也要有可读原因');
+  const to = await checkForUpdate({ siteUrl: 'https://s', current: '0.1.4', fetchImpl: async () => { throw Object.assign(new Error('x'), { name: 'AbortError' }); } });
+  assert.equal(to.status, 'unknown');
+  assert.equal(to.reason, '请求超时');
+  const empty = await checkForUpdate({ siteUrl: 'https://s', current: '0.1.4', fetchImpl: ok({}) });
+  assert.equal(empty.status, 'unknown');
+  assert.match(empty.reason, /还没有已发布/);
+  assert.equal((await checkForUpdate({ siteUrl: '', current: '0.1.4' })).status, 'unknown');
 });
 
 fs.rmSync(HOME, { recursive: true, force: true });

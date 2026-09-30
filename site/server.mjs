@@ -189,14 +189,19 @@ function serveAsset(res, rel) {
 function downloadManifest() {
   try {
     const m = JSON.parse(fs.readFileSync(path.join(DL_DIR, 'manifest.json'), 'utf8'));
-    return { ok: true, version: m.version || '', files: Array.isArray(m.files) ? m.files : [] };
+    return {
+      ok: true,
+      version: m.version || '',
+      generatedAt: m.generatedAt || '',
+      files: Array.isArray(m.files) ? m.files : [],
+    };
   } catch {
     // 清单还没生成（正在拉包 / CI 还没推完）→ **就报空**。
     //
     // 早先这里有个"列目录兜底"，结果把**正在下载的半截文件**也列进了下载卡
     // （实测：97MB 的 dmg 只下了 10MB 就被列出来，点下载拿到的是坏包）。
     // 让页面显示"尚未上传"远好过让医师下载一个装不上的安装包。
-    return { ok: true, version: '', files: [] };
+    return { ok: true, version: '', generatedAt: '', files: [] };
   }
 }
 function serveDownload(req, res, name) {
@@ -323,6 +328,15 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true });
   }
   if (p === '/api/session') return sendJson(res, 200, { ok: true, authed: isAuthed, admin: isAdmin });
+
+  // ── 版本号（**故意不鉴权**）：桌面版的「检查更新」要能问一句"现在最新是几版"。
+  //    只回版本号与生成时间 —— 不回文件名、不回下载地址、不回包大小。
+  //    理由：这个端点是整站唯一的公开面，泄露面必须小到只剩一个版本号，
+  //    否则等于把内部下载区（安装包清单）暴露给任何知道域名的人。
+  if (p === '/api/latest') {
+    const m = downloadManifest();
+    return sendJson(res, 200, { ok: true, version: m.version || '', generatedAt: m.generatedAt || '' });
+  }
 
   // ── 安装包清单（登录后可见）
   if (p === '/api/downloads') {

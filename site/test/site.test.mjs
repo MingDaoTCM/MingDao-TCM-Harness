@@ -135,6 +135,21 @@ await testAsync('/downloads/<文件> 未登录 → 302 回首页（不能直接�
   assert.equal(r.headers.get('location'), '/');
   jar.tcm_session = saved;
 });
+await testAsync('★ /api/latest 免登录，但**只**回版本号（桌面版「检查更新」用它）', async () => {
+  const saved = jar.tcm_session;
+  clearJar();
+  const r = await req('/api/latest', { auth: false });
+  assert.equal(r.status, 200, '检查更新必须免登录可用，否则桌面版问不到最新版本');
+  const j = await r.json();
+  assert.equal(j.ok, true);
+  assert.equal(j.version, '0.9.9', '应回清单里的版本');
+  // 这是整站唯一的公开面：泄露面必须小到只剩一个版本号
+  const raw = JSON.stringify(j);
+  for (const leak of ['.deb', '.exe', '.dmg', '.AppImage', 'mingdao-tcm', 'sha256']) {
+    assert.ok(!raw.includes(leak), `公开的版本端点不得泄露「${leak}」：${raw}`);
+  }
+  jar.tcm_session = saved;
+});
 await testAsync('★ 清单缺失时**报空**，绝不把目录里的半截文件列出来', async () => {
   // 这条对应一个真实缺陷：早先"清单缺失 → 列目录兜底"，于是正在下载的半截安装包
   // 也会进下载卡（实测 97MB 的 dmg 只下了 10MB 就被列出）—— 医师下到的是坏包。

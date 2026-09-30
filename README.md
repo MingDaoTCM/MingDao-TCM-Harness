@@ -82,15 +82,21 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 
 ## 与上游的版本关系
 
-- 本层当前对齐 **MingDao-Harness v0.6.6**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
-- 已在 v0.6.6 内核下验证全部 8 档门禁：`pack verify`（静态）、`pack.test.mjs`（52 项）、
-  `integration.test.mjs`（11 项）、`dify.test.mjs`（17 项）、`tcm-data`（14 项）、`ui-wiring`（7 项）、
-  `desktop-orchestrator`（15 项）、`site`（19 项）**全部通过，无代码改动**；
-  v0.6.6 只是 release + Windows 测试门禁修复（未触及 packs / constraints / providers / permissions，
-  见 `v0.6.5..v0.6.6` 的 diff）；
+- 本层当前对齐 **MingDao-Harness v0.6.7**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
+- 已在 v0.6.7 内核下验证全部 8 档门禁：`pack verify`（静态）、`pack.test.mjs`（53 项）、
+  `integration.test.mjs`（11 项）、`dify.test.mjs`（18 项）、`tcm-data`（14 项）、`ui-wiring`（7 项）、
+  `desktop-orchestrator`（19 项）、`site`（22 项）**全部通过，无代码改动**；
+  v0.6.7 中与扩展点相关的只有一处、且是**改进**：自定义 Provider 模块的 ESM 缓存键从
+  `?v=Date.now()` 改为按 **mtime**（此前每次建 provider 都重新 import，长驻 WebUI 里模块实例无限累积）；
+  另有权限面的 deny 绕过收口（`$(…)`/子 shell/`\r`/续行 当分隔符）——本层 Pack 不执行 shell，不受影响；
 - 接入的扩展点：垂域 **Pack（Pack API v1：tools / constraints / promptSections）** + 自定义 **Provider（dify.mjs，含 `supportsVision`）**；
 - 内核升级后如扩展点有变，本层适配后再跟版本；
 - **内核 bug 在上游修，本层不重复造**。
+
+> 桌面版（`tools/tcm-ui/desktop/`）只从 `$MINGDAO_HOME/{packs,providers}` 加载扩展，
+> 所以它**必须**在首启时把打包进来的垂域层装进数据目录 —— 见 `orchestrator.installLayer`。
+> 少了这一步，装出来的就是一个"裸内核"：没有 tcm 工具、没有 dify provider，
+> 问诊正文由 DeepSeek 直连生成、**完全不碰 Dify 工作流**（2026-09-24 用户实测报回）。
 
 ## 远端仓库（三平台私有镜像）
 

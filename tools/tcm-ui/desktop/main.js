@@ -13,7 +13,7 @@ import { app, BrowserWindow, shell, dialog, Menu, Tray, nativeImage } from 'elec
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APP_NAME, resolveAppRoot, resolveKernelRoot, startApp } from './orchestrator.mjs';
+import { APP_NAME, resolveAppRoot, resolveKernelRoot, startApp, checkForUpdate } from './orchestrator.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -43,6 +43,101 @@ function loadIcon(file) {
 function fail(msg, silent) {
   if (silent) { console.error(`[smoke] ${msg}`); return; }
   dialog.showErrorBox(APP_NAME, msg);
+}
+
+// ── 帮助菜单要用的三个外部入口（与上游桌面版同口径，可用环境变量覆盖）──────────
+// 为什么把 URL 做成常量而不是散在菜单里：站点/反馈地址是会变的（内部域名、换论坛），
+// 集中一处才好改，也便于在打包时用环境变量指向测试环境。
+const SITE_URL = (process.env.MINGDAO_TCM_SITE || 'https://tcm.mingdao.ai').replace(/\/+$/, '');
+// 问题反馈：默认用明道社区论坛（与上游桌面版指向同一个地方）。
+const FEEDBACK_URL = process.env.MINGDAO_TCM_FEEDBACK_URL || 'https://harness.mingdao.ai/forum/';
+const openExternal = (url) => shell.openExternal(url).catch((e) => {
+  // 打不开要**说出来**：静默失败会让医师以为"点了没反应"
+  dialog.showErrorBox(APP_NAME, `无法打开链接：${url}\n${e?.message || e}`);
+});
+
+/**
+ * 「检查更新」。逻辑在 orchestrator 的 `checkForUpdate`（纯 Node，有单测）；
+ * 这里只负责弹窗 —— 三条硬要求照上游桌面版踩过的坑写：
+ *   ① **任何路径都必须有反馈**（成功/失败/超时/被禁用一律弹窗，绝不静默）；
+ *   ② 超时兜底在 orchestrator 里（站点在内网，可能不可达）；
+ *   ③ 文案必带当前版本号，否则医师不知道自己在评估什么。
+ */
+async function checkUpdates() {
+  const show = (opts) => dialog.showMessageBox(win ?? undefined, opts).catch(() => {});
+  const cur = app.getVersion();
+  const r = await checkForUpdate({ siteUrl: SITE_URL, current: cur });
+
+  if (r.status === 'disabled') {
+    return show({ type: 'info', title: '检查更新', message: '已通过环境变量关闭检查更新', detail: `当前版本 v${cur}` });
+  }
+  if (r.status === 'newer') {
+    const pick = await show({
+      type: 'info', title: '检查更新',
+      message: `发现新版本 v${r.latest}（当前 v${cur}）`,
+      detail: `是否现在打开下载页？下载页需要访问密码。\n${SITE_URL}/`,
+      buttons: ['前往下载', '稍后'], defaultId: 0, cancelId: 1,
+    });
+    if (pick?.response === 0) openExternal(`${SITE_URL}/`);
+    return;
+  }
+  if (r.status === 'current') {
+    return show({
+      type: 'info', title: '检查更新',
+      message: `已是最新版本 v${cur}`,
+      detail: `站点上的最新版本为 v${r.latest}。`,
+    });
+  }
+  const pick = await show({
+    type: 'warning', title: '检查更新',
+    message: `暂时查不到最新版本（当前 v${cur}）`,
+    detail: `原因：${r.reason || '未知'}\n确认能访问 ${SITE_URL} 后再试；也可以直接打开下载页手动查看。`,
+    buttons: ['打开下载页', '知道了'], defaultId: 0, cancelId: 1,
+  });
+  if (pick?.response === 0) openExternal(`${SITE_URL}/`);
+}
+
+/** 应用菜单：与上游桌面版同结构（文件/编辑/视图/窗口/帮助），帮助里放官网、检查更新、反馈、关于 */
+function buildAppMenu() {
+  const template = [
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+    { label: '文件', submenu: [{ role: 'quit', label: `退出 ${APP_NAME}` }] },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' }, { role: 'redo', label: '重做' }, { type: 'separator' },
+        { role: 'cut', label: '剪切' }, { role: 'copy', label: '复制' }, { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+      ],
+    },
+    {
+      label: '视图',
+      submenu: [
+        { role: 'reload', label: '刷新' }, { type: 'separator' },
+        { role: 'zoomIn', label: '放大' }, { role: 'zoomOut', label: '缩小' }, { role: 'resetZoom', label: '重置缩放' },
+        { type: 'separator' }, { role: 'togglefullscreen', label: '全屏' },
+        ...(isDev ? [{ role: 'toggleDevTools', label: '开发者工具' }] : []),
+      ],
+    },
+    { label: '窗口', submenu: [{ role: 'minimize', label: '最小化' }, { role: 'close', label: '关闭窗口' }] },
+    {
+      label: '帮助',
+      submenu: [
+        { label: '下载页（内部站点）', click: () => openExternal(`${SITE_URL}/`) },
+        { label: '检查更新', click: () => checkUpdates() },
+        { type: 'separator' },
+        { label: '问题反馈', click: () => openExternal(FEEDBACK_URL) },
+        {
+          label: `关于 ${APP_NAME}`,
+          click: () => dialog.showMessageBox(win ?? undefined, {
+            type: 'info', title: '关于', message: `${APP_NAME} 桌面版`,
+            detail: `版本 v${app.getVersion()}\n中医垂域问诊工作台（问诊正文与知识库走 Dify 工作流）\n${SITE_URL}`,
+          }).catch(() => {}),
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 /** 起内核 + 问诊台（逻辑全在 orchestrator，这里只负责报错与退出） */
@@ -91,6 +186,9 @@ function createTray(url) {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '打开问诊台', click: () => show(url) },
       { type: 'separator' },
+      { label: '检查更新', click: () => checkUpdates() },
+      { label: '问题反馈', click: () => openExternal(FEEDBACK_URL) },
+      { type: 'separator' },
       { label: '退出', click: () => app.quit() },
     ]));
     tray.on('click', () => show(url));
@@ -118,6 +216,8 @@ if (!app.requestSingleInstanceLock()) {
       else app.quit();
       return;
     }
+    // 菜单在冒烟分支之前就建好 —— CI 那一步能顺带证明菜单模板本身不会抛（菜单属于启动路径）
+    if (!smoke) buildAppMenu();
     if (smoke) {
       // 自检：证明「内核 + 问诊台都真起来了」再退出，不建窗口（CI 用 xvfb 跑它）
       console.log('MINGDAO_TCM_DESKTOP_SMOKE_OK');
