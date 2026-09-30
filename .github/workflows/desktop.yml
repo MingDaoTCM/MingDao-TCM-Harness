@@ -132,7 +132,10 @@ jobs:
           # 用 mapfile 按行读（mac zip 文件名含空格），并**排除 `._*`**：
           # macOS 打包会留下 AppleDouble 资源叉文件（`._xxx.dmg`），它们同样以 .dmg 结尾，
           # 混进产物后被推到站点、进了清单，页面上就多出两个 0.0MB 的按钮。
-          mapfile -t FILES < <(ls -1 *.AppImage *.deb *.exe *.dmg *.zip 2>/dev/null | grep -v '^\._' | sort -u)
+          # ⚠ 不用 mapfile：macOS runner 自带 bash 3.2，没有 mapfile（实测退出码 127）。
+          # 用 while read + 数组追加，3.2 也认；顺便排除 macOS 的 AppleDouble 垃圾（._xxx.dmg）。
+          FILES=()
+          while IFS= read -r f; do FILES+=("$f"); done < <(ls -1 *.AppImage *.deb *.exe *.dmg *.zip 2>/dev/null | grep -v '^\._' | sort -u)
           if [ "${#FILES[@]}" -eq 0 ]; then echo "::error title=no-artifacts::本腿没有产物"; exit 1; fi
           echo "本腿产物："; printf '  %s\n' "${FILES[@]}"
 

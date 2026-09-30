@@ -35,12 +35,16 @@ extraResources:
   #   一个 filter 少一行，表现是"装完不能用/用错"，而且**本机跑不出来**（本机是开发态，直接读仓库）。
   - from: ../../..
     to: app
+    # 用**目录级** filter，不要逐个文件列举 —— 2026-09-24 连着栽了两次：
+    #   先漏 `layer/providers/**`（产物没有 Dify Provider），后漏 `tools/tcm-ui/settings.mjs`
+    #   （冒烟当场报 Cannot find module）。逐个列举等于"每次加文件都要记得改这里"，
+    #   而漏掉的表现是装完起不来 / 静默少功能，本机还测不出来。
     filter:
       - layer/packs/tcm/**
       - layer/providers/**
-      - tools/tcm-ui/server.mjs
-      - tools/tcm-ui/tcm-data.mjs
-      - tools/tcm-ui/public/**
+      - tools/tcm-ui/**
+      - '!tools/tcm-ui/test/**'
+      - '!tools/tcm-ui/desktop/**'
   # 内核：默认取工作区同级的 MingDao-Harness
   - from: ../../../../MingDao-Harness/src
     to: kernel/src

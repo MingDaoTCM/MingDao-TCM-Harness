@@ -246,9 +246,17 @@ await testAsync('★ 检查更新：四种结果都有明确答案，且**永不
 //   resources/app，再让 installLayer 去装 —— filter 少一行就会红。
 await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物，垂域层必须装得进去', async () => {
   const yml = fs.readFileSync(path.join(DESKTOP, 'electron-builder.yml'), 'utf8');
-  const block = /to:\s*app\n\s*filter:\n((?:\s*-\s*.+\n)+)/.exec(yml);
-  assert.ok(block, '应能从 electron-builder.yml 解析出 to: app 的 filter 列表');
-  const pats = block[1].split('\n').map((l) => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean);
+  // 解析要**容忍注释与否定模式**（filter 块里现在有说明注释，还会用 '!xxx' 排除子目录）
+  const lines = yml.split('\n');
+  const start = lines.findIndex((l) => /to:\s*app\s*$/.test(l));
+  assert.ok(start >= 0, '应能从 electron-builder.yml 找到 `to: app`');
+  const pats = [];
+  for (let k = start + 1; k < lines.length; k++) {
+    if (/^\s*-\s*from:/.test(lines[k])) break;                 // 下一条 extraResources
+    const m = /^\s*-\s*'?([^'\s#]+)'?\s*(?:#.*)?$/.exec(lines[k]);
+    if (m && m[1] !== 'filter:') pats.push(m[1]);
+  }
+  assert.ok(pats.length > 0, '应能解析出 filter 列表，实际：' + JSON.stringify(pats));
   assert.ok(pats.some((p) => p.startsWith('layer/providers/')), 'filter 必须带上 layer/providers/**');
   assert.ok(pats.some((p) => p.startsWith('layer/packs/')), 'filter 必须带上 layer/packs/tcm/**');
 
@@ -256,6 +264,7 @@ await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物
   const appDir = path.join(pkg, 'app');
   fs.mkdirSync(appDir, { recursive: true });
   for (const raw of pats) {
+    if (raw.startsWith('!')) continue;          // 否定模式不参与"要带哪些"
     const rel = raw.replace(/\/\*\*$/, '');
     const src = path.join(REPO, rel);
     if (!fs.existsSync(src)) continue;
@@ -269,6 +278,19 @@ await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物
     assert.equal(layer.provider, '已安装', '按打包 filter 组装的产物里必须有 dify provider：' + JSON.stringify(layer));
     assert.equal(layer.pack, '已安装', 'Pack 也要能装进去：' + JSON.stringify(layer));
     assert.ok(fs.existsSync(path.join(pkgHome, 'providers', 'dify.mjs')));
+
+    // ★ 通用守卫：server.mjs 里 import 的**每一个**本地模块都必须落在产物里。
+    //   逐个文件列举的 filter 漏一个就是"装完起不来"（2026-09-24 连着栽两次：
+    //   先漏 layer/providers/**，后漏 tools/tcm-ui/settings.mjs —— 后者是 CI 冒烟
+    //   报 Cannot find module 才发现的）。这条断言把整类问题一次挡住。
+    const srv = fs.readFileSync(path.join(appDir, 'tools', 'tcm-ui', 'server.mjs'), 'utf8');
+    const rels = [...srv.matchAll(/from\s+'(\.[^']+)'/g)].map((m) => m[1]);
+    assert.ok(rels.length > 0, '应能从 server.mjs 解析出本地 import');
+    const missing = rels
+      .map((r) => path.resolve(path.join(appDir, 'tools', 'tcm-ui'), r))
+      .filter((abs) => !fs.existsSync(abs))
+      .map((abs) => path.relative(appDir, abs));
+    assert.deepEqual(missing, [], '产物里缺少被 import 的模块（打包 filter 漏了？）：' + missing.join(', '));
     assert.ok(fs.existsSync(path.join(pkgHome, 'packs', 'tcm', 'pack.mjs')));
   } finally {
     fs.rmSync(pkg, { recursive: true, force: true });
