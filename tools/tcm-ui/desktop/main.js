@@ -216,8 +216,10 @@ if (!app.requestSingleInstanceLock()) {
       else app.quit();
       return;
     }
-    // 菜单在冒烟分支之前就建好 —— CI 那一步能顺带证明菜单模板本身不会抛（菜单属于启动路径）
-    if (!smoke) buildAppMenu();
+    // 菜单**在冒烟分支之前**就建好：CI 那次 xvfb 冒烟于是也覆盖了菜单模板。
+    // 否则这几十行菜单代码在本机与 CI 里都没跑过 —— 一次运行期错误要等医师打开才发现。
+    // 托盘菜单早就在用同一个 Menu.buildFromTemplate，这条路在无头环境里是通的。
+    buildAppMenu();
     if (smoke) {
       // 自检：证明「内核 + 问诊台都真起来了」再退出，不建窗口（CI 用 xvfb 跑它）
       console.log('MINGDAO_TCM_DESKTOP_SMOKE_OK');
