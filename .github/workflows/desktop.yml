@@ -118,9 +118,11 @@ jobs:
       # 实测一次发版 ~3.6GB，几条腿跑下来把配额撑爆，四条腿全挂在 upload-artifact、
       # publish 被 skip（报 `Artifact storage quota has been hit`）。改成每条腿自己推，
       # 顺带把"跑完五条腿才发版"变成"每条腿落地即发布"。
-      - name: 推本平台安装包（站点 + Release）
+      - name: 发布本平台安装包（Release 优先，站点随后）
         if: startsWith(github.ref, 'refs/tags/')
-        timeout-minutes: 30
+        # 站点服务器上行只有 50–100KB/s（上游脚本里写明的），mac 腿近 300MB —— 30 分钟不够，
+        # 实测三条腿卡在超时。放宽到 120 分钟；即便如此，**Release 也放在前面先发**（见下）。
+        timeout-minutes: 120
         env:
           GH_TOKEN: ${{ github.token }}
           TCM_SSH_KEY: ${{ secrets.TCM_DEPLOY_SSH_KEY }}
@@ -139,7 +141,20 @@ jobs:
           if [ "${#FILES[@]}" -eq 0 ]; then echo "::error title=no-artifacts::本腿没有产物"; exit 1; fi
           echo "本腿产物："; printf '  %s\n' "${FILES[@]}"
 
-          # ① 站点：tar 经 ssh（目标机**没装 rsync**；--null 保住含空格的文件名）
+          # ① GitHub Release：**先发这个**（GitHub 内部传输很快）。
+          #    放在站点推送之前，是因为站点上传受服务器带宽限制、可能超时 ——
+          #    那样至少 Release 是完整可下载的，不会像 v0.1.6 那样三条腿超时后连 Release 都没建。
+          REPO="$GITHUB_REPOSITORY"; TAG="$GITHUB_REF_NAME"
+          gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "$REPO" --generate-notes --title "$TAG" >/dev/null 2>&1 || true
+          gh release upload "$TAG" "${FILES[@]}" -R "$REPO" --clobber
+          echo "  已上传 Release"
+
+          # ② 站点：tar 经 ssh（目标机**没装 rsync**；--null 保住含空格的文件名）。
+          #    跳过 .zip：它们是给自动更新用的，页面按 dmg/exe/deb/AppImage 展示，不显示 zip ——
+          #    白占 180MB 的慢带宽。zip 仍然在 GitHub Release 里。
+          SITE_FILES=()
+          for f in "${FILES[@]}"; do case "$f" in *.zip) ;; *) SITE_FILES+=("$f");; esac; done
           if [ -n "${TCM_SSH_KEY:-}" ]; then
             TARGET="${TCM_TARGET:-root@8.210.103.117}"
             HOST="${TARGET#*@}"
@@ -152,7 +167,7 @@ jobs:
             # 匹配用**去掉 v 的版本号**且两端带 '-'（产物名里没有 v，按 tag 匹配一个都对不上）。
             VER="${GITHUB_REF_NAME#v}"
             ssh $SSHOPT "$TARGET" "cd /opt/1panel/www/sites/tcm-site/downloads && find . -maxdepth 1 -type f \\( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.deb' \\) ! -name '*-'$VER'-*' -delete ; rm -f manifest.json ; true"
-            printf '%s\0' "${FILES[@]}" | tar -cf - --null --files-from=- | ssh $SSHOPT "$TARGET" 'tar -xf - -C /opt/1panel/www/sites/tcm-site/downloads/'
+            printf '%s\0' "${SITE_FILES[@]}" | tar -cf - --null --files-from=- | ssh $SSHOPT "$TARGET" 'tar -xf - -C /opt/1panel/www/sites/tcm-site/downloads/'
             echo "  已推送站点"
             scp -q $SSHOPT "$GITHUB_WORKSPACE/tcm/site/fetch-assets.py" "$TARGET:/opt/mingdao/tcm-fetch-assets.py" || true
             ssh $SSHOPT "$TARGET" "python3 /opt/mingdao/tcm-fetch-assets.py --tag '$GITHUB_REF_NAME' --dir /opt/1panel/www/sites/tcm-site/downloads --manifest-only" || true
@@ -160,12 +175,7 @@ jobs:
             echo "::notice title=skip::未配置 TCM_DEPLOY_SSH_KEY，跳过站点推送（可用 site/deploy.sh 补）"
           fi
 
-          # ② GitHub Release：四条腿并发，创建会撞车 —— 忽略"已存在"，上传用 --clobber
-          REPO="$GITHUB_REPOSITORY"; TAG="$GITHUB_REF_NAME"
-          gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 \
-            || gh release create "$TAG" -R "$REPO" --generate-notes --title "$TAG" >/dev/null 2>&1 || true
-          gh release upload "$TAG" "${FILES[@]}" -R "$REPO" --clobber
-          echo "  已上传 Release"
+
 
   # 汇总校验：四条腿各自发布完之后，确认 Release 资产齐、站点清单是终态。
   # 这里**不需要工件**（那正是被配额打挂的东西），只看两边落地结果。
