@@ -117,6 +117,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mingdao-tcm-desktop-${{ matrix.name }}
+          # 工件只用于 build→publish 之间传包，发完版就没用了。
+          # 不设保留期会一直攒（一次发版 ~3.6GB），实测会把仓库的工件配额撑爆，
+          # 表现是四条腿全挂在 upload-artifact、publish 被 skip（报 Artifact storage quota has been hit）。
+          retention-days: 1
           path: |
             tcm/tools/tcm-ui/desktop/dist/*.AppImage
             tcm/tools/tcm-ui/desktop/dist/*.deb

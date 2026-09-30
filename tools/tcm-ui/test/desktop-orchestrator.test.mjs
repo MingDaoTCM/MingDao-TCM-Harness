@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveAppRoot, resolveKernelRoot, startApp, versionGt, checkForUpdate, installLayer } from '../desktop/orchestrator.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -274,6 +274,25 @@ await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物
     fs.rmSync(pkg, { recursive: true, force: true });
     fs.rmSync(pkgHome, { recursive: true, force: true });
   }
+});
+
+// ★ 2026-09-24 CI 冒烟实测：产物里内核版本是 **0.0.0**（只带了 src/、没带 package.json）
+//   → 垂域 Pack 的 engines 窗口校验失败 → **Pack 被静默跳过** → 没有 tcm 工具、问诊不走 Dify。
+//   这条按 electron-builder 的条目**真的拼一个 kernel/ 出来**，再问内核自己"你是几版" ——
+//   比断言 yml 里有某个字符串强得多。
+await testAsync('★ 打包后的内核必须报得出真实版本（否则 Pack 被 engines 校验跳过）', async () => {
+  const yml = fs.readFileSync(path.join(DESKTOP, 'electron-builder.yml'), 'utf8');
+  assert.match(yml, /to:\s*kernel\/package\.json/, 'extraResources 必须把内核 package.json 带进 kernel/');
+  const pkgRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-kernel-pkg-'));
+  const kdir = path.join(pkgRoot, 'kernel');
+  fs.cpSync(path.join(KERNEL, 'src'), path.join(kdir, 'src'), { recursive: true });
+  fs.copyFileSync(path.join(KERNEL, 'package.json'), path.join(kdir, 'package.json'));
+  try {
+    const mod = await import(pathToFileURL(path.join(kdir, 'src', 'packs.js')).href);
+    const v = mod.coreVersionOf();
+    assert.notEqual(v, '0.0.0', '打包后的内核必须读到真实版本；0.0.0 会让垂域 Pack 被跳过');
+    assert.match(v, /^\d+\.\d+\.\d+/, '版本号应形如 x.y.z：' + v);
+  } finally { fs.rmSync(pkgRoot, { recursive: true, force: true }); }
 });
 
 fs.rmSync(HOME, { recursive: true, force: true });
