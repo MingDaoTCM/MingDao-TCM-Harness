@@ -24,9 +24,22 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { roster, patientDetail, reminders } from './tcm-data.mjs';
+import { readSettings, writeSettings } from './settings.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(HERE, 'public');
+/** 内部站点（下载页/检查更新/反馈都指向它）。可用环境变量覆盖，便于指向测试环境。 */
+const SITE_URL = (process.env.MINGDAO_TCM_SITE || 'https://tcm.mingdao.ai').replace(/\/+$/, '');
+
+/** 读请求体（设置页要 POST 密钥；限 64KB 足够） */
+function readBody(req, limit = 64 * 1024) {
+  return new Promise((resolve) => {
+    let n = 0; const chunks = [];
+    req.on('data', (c) => { n += c.length; if (n > limit) { resolve(''); req.destroy(); return; } chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', () => resolve(''));
+  });
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -78,13 +91,49 @@ function json(/** @type {any} */ res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
-function handleTcm(/** @type {any} */ req, /** @type {any} */ res, /** @type {string} */ home) {
+function handleTcm(/** @type {any} */ req, /** @type {any} */ res, /** @type {string} */ home, /** @type {any} */ ctx = {}) {
   const u = new URL(req.url || '/', 'http://localhost');
   if (!home) {
     json(res, 500, { ok: false, error: '未配置数据目录：用 --home 或环境变量 MINGDAO_HOME / MINGDAO_UI_HOME 指定' });
     return;
   }
   try {
+    // ── 设置：密钥由医师自己填 / 改（**不内置在仓库里**）────────────────────
+    // 只监听回环地址（本页只有本机能开）＋ GET 只回脱敏值：
+    // 设置页要能让医师确认"填过没有"，但不能把明文回给浏览器（截图/演示即泄露）。
+    if (u.pathname === '/api/tcm/settings') {
+      if (req.method === 'GET') {
+        json(res, 200, { ok: true, settings: readSettings(home), home, currentVersion: String(ctx.currentVersion || ''), siteUrl: SITE_URL });
+        return;
+      }
+      if (req.method === 'POST') {
+        readBody(req).then((raw) => {
+          let body = null;
+          try { body = JSON.parse(raw || '{}'); } catch { json(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
+          const r = writeSettings(home, body || {});
+          json(res, r.ok ? 200 : 400, r.ok ? { ...r, home } : r);
+        }).catch((e) => json(res, 400, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      json(res, 405, { ok: false, error: '只支持 GET / POST' });
+      return;
+    }
+    // ── 检查更新：由**服务端**去问站点（浏览器直连会撞 CORS，且站点只对登录用户开主页）
+    //    站点那侧 /api/latest 免登录、且只回版本号。
+    if (u.pathname === '/api/tcm/update') {
+      const cur = String(ctx.currentVersion || '');
+      // 动态 import：命令行单跑问诊台时不一定有 desktop/ 那一层，缺了也只是"查不到版本"
+      (async () => {
+        const base = { siteUrl: SITE_URL, nextUrl: `${SITE_URL}/` };
+        try {
+          const { checkForUpdate } = await import('../desktop/orchestrator.mjs');
+          json(res, 200, { ok: true, ...(await checkForUpdate({ siteUrl: SITE_URL, current: cur })), ...base });
+        } catch (e) {
+          json(res, 200, { ok: false, status: 'unknown', current: cur, latest: '', reason: String(e?.message || e), ...base });
+        }
+      })();
+      return;
+    }
     if (u.pathname === '/api/tcm/patients') {
       const r = roster(home);
       json(res, r.ok ? 200 : 500, { ...r, home });
@@ -126,7 +175,7 @@ export function startUiServer(opts = {}) {
   const server = http.createServer(async (req, res) => {
     const url = req.url || '/';
     // 代理自有的只读端点先处理，不转发给内核
-    if (url.startsWith('/api/tcm/')) { handleTcm(req, res, home); return; }
+    if (url.startsWith('/api/tcm/')) { handleTcm(req, res, home, { currentVersion: opts.currentVersion }); return; }
     if (!url.startsWith('/api/')) { serveStatic(req, res); return; }
 
     // —— 转发 /api/* 给内核，SSE 原样透传（绝不缓冲：缓冲会把流式问诊变成"等全部再显示"）——

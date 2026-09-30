@@ -162,7 +162,11 @@ function createWindow(url) {
     title: APP_NAME,
     backgroundColor: '#0f1216',
     icon: loadIcon('icon.png') || undefined,
-    autoHideMenuBar: process.platform !== 'darwin',
+    // ⚠ 这里曾经是 `autoHideMenuBar: process.platform !== 'darwin'` ——
+    //   Linux/Windows 上菜单栏默认**收起**，于是「帮助 → 检查更新/问题反馈/关于」这些
+    //   功能"存在但看不见"（用户 v0.1.5 实测反馈：装了也没看到这些入口）。
+    //   改成常显；页面底部也放了同样的链接，两条路都能到。
+    autoHideMenuBar: false,
     // 与本项目其它前端同口径：不开 node 集成、开上下文隔离
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });

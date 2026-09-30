@@ -357,6 +357,20 @@ export function initConsult() {
 
   $('#compose').onclick = () => { prefillConsult(composeMessage()); };
 
+  // 「直接问诊」：合成 + 立刻发送。少掉"合成到输入框 → 再点发送"两步 ——
+  // 医师填完表最想做的就是把它发出去；想改措辞的人用下面那个次要按钮。
+  $('#directSend').onclick = () => {
+    const text = composeMessage();
+    if (!text.trim()) { $('#hint').textContent = '表单还是空的 —— 至少填「主诉」再直接问诊。'; return; }
+    const att = pendingAttachments.slice();
+    if (att.length) {
+      pendingAttachments = [];
+      $('#tongue').value = ''; $('#thumb').style.display = 'none';
+      $('#tongueTip').textContent = '';
+    }
+    send(text, att);
+  };
+
   $('#clearForm').onclick = () => {
     for (const id of ['f_zhushu', 'f_xianbingshi', ...OPT_FIELDS.map(([k]) => 'f_' + k)]) { const el = $('#' + id); if (el) el.value = ''; }
     for (const id of ['pName', 'pBirth']) $('#' + id).value = '';

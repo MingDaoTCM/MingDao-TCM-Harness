@@ -144,8 +144,15 @@ export function pointConfigAtDify(home) {
   } catch { return false; }
 }
 
-/** 版本比较：只认前 3 段数字，预发布后缀忽略（内部发布不玩 rc） */
-export function versionGt(a, b) {
+/** 桌面版自己的版本号（界面上的「检查更新 / 关于」要显示它） */
+export function readAppVersion(appRoot) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(appRoot, 'tools', 'tcm-ui', 'desktop', 'package.json'), 'utf8'));
+    return String(j.version || '');
+  } catch { return ''; }
+}
+
+/** 版本比较：只认前 3 段数字，预发布后缀忽略（内部发布不玩 rc） */export function versionGt(a, b) {
   const seg = (v) => String(v || '').replace(/^v/, '').split(/[.\-+]/).map((n) => parseInt(n, 10) || 0);
   const pa = seg(a);
   const pb = seg(b);
@@ -289,6 +296,8 @@ export async function startApp(opts = {}) {
     home,
     host,
     quiet: opts.quiet !== false,
+    // 界面上的「检查更新」要能说"当前 vX.Y.Z" —— 版本从桌面版自己的 package.json 读
+    currentVersion: readAppVersion(appRoot),
   });
 
   return {
