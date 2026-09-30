@@ -25,6 +25,12 @@ import datetime
 KEEP = ('.exe', '.dmg', '.zip', '.AppImage', '.deb')
 
 
+def is_installer(name):
+    """macOS 打包会留下 AppleDouble 资源叉（`._xxx.dmg`），同样以 .dmg 结尾 ——
+    它不是安装包，混进清单只会让页面多出 0 字节的按钮。"""
+    return name.endswith(KEEP) and not name.startswith('._')
+
+
 def api(url, token, accept='application/vnd.github+json'):
     req = urllib.request.Request(url, headers={
         'Authorization': 'Bearer ' + token,
@@ -108,9 +114,17 @@ def main():
         raise SystemExit('缺少 token（--token-file / --token-stdin / GH_TOKEN）')
 
     def main_manifest_only(tag, d):
+        # 顺手清掉 AppleDouble 垃圾（macOS 打包的副产物，不是安装包）
+        for n in list(os.listdir(d)):
+            if n.startswith('._'):
+                try:
+                    os.unlink(os.path.join(d, n))
+                    print('  ✗ 清掉垃圾文件：%s' % n, flush=True)
+                except OSError:
+                    pass
         files = []
         for n in sorted(os.listdir(d)):
-            if not n.endswith(KEEP):
+            if not is_installer(n):
                 continue
             p = os.path.join(d, n)
             files.append({'name': n, 'size': os.path.getsize(p), 'sha256': sha256(p)})
@@ -135,7 +149,7 @@ def main():
         raise SystemExit('缺少 --repo（owner/name）')
     os.makedirs(a.dir, exist_ok=True)
     rel = json.load(api('https://api.github.com/repos/%s/releases/tags/%s' % (a.repo, a.tag), token))
-    assets = [x for x in rel.get('assets', []) if x['name'].endswith(KEEP)]
+    assets = [x for x in rel.get('assets', []) if is_installer(x['name'])]
     if not assets:
         raise SystemExit('Release %s 没有可发布的安装包' % a.tag)
     print('  共 %d 个安装包' % len(assets), flush=True)
@@ -146,7 +160,7 @@ def main():
     for old in os.listdir(a.dir):
         if old in keep_names or old == 'manifest.json':
             continue
-        if old.endswith(KEEP):
+        if is_installer(old) or old.startswith('._'):
             try:
                 os.unlink(os.path.join(a.dir, old))
                 print('  ✗ 清掉旧版本：%s' % old, flush=True)
