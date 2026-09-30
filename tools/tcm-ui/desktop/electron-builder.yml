@@ -26,11 +26,18 @@ files:
   - build/tray.png
 
 extraResources:
-  # 问诊台 + 垂域 Pack：保持仓库内的相对布局（见文件头的说明）
+  # 问诊台 + 垂域层：保持仓库内的相对布局（见文件头的说明）
+  #
+  # ⚠ `layer/providers/**` 必须在这里 —— 2026-09-24 实测漏了它：
+  #   打包产物里只有 Pack、没有 Dify Provider 模块 → 内核加载不到自定义 Provider
+  #   → `provider: dify` 落入"服务商缺少 baseUrl"分支，桌面版直接起不来；
+  #   而如果有人为了让它起来补一个 baseUrl，就变成"问诊绕过 Dify"（用户报的那件事）。
+  #   一个 filter 少一行，表现是"装完不能用/用错"，而且**本机跑不出来**（本机是开发态，直接读仓库）。
   - from: ../../..
     to: app
     filter:
       - layer/packs/tcm/**
+      - layer/providers/**
       - tools/tcm-ui/server.mjs
       - tools/tcm-ui/tcm-data.mjs
       - tools/tcm-ui/public/**

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveAppRoot, resolveKernelRoot, startApp, versionGt, checkForUpdate } from '../desktop/orchestrator.mjs';
+import { resolveAppRoot, resolveKernelRoot, startApp, versionGt, checkForUpdate, installLayer } from '../desktop/orchestrator.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.resolve(HERE, '..');
@@ -238,6 +238,42 @@ await testAsync('★ 检查更新：四种结果都有明确答案，且**永不
   assert.equal(empty.status, 'unknown');
   assert.match(empty.reason, /还没有已发布/);
   assert.equal((await checkForUpdate({ siteUrl: '', current: '0.1.4' })).status, 'unknown');
+});
+
+// ★ 2026-09-24：打包 filter 里漏了 `layer/providers/**`，产物只有 Pack 没有 Dify Provider
+//   → 桌面版起不来（或补个 baseUrl 就变成"问诊绕过 Dify"）。本机是开发态、直接读仓库，
+//   所以这个缺陷**本机跑不出来**。这条测试按 electron-builder 的 filter 组装一个模拟的
+//   resources/app，再让 installLayer 去装 —— filter 少一行就会红。
+await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物，垂域层必须装得进去', async () => {
+  const yml = fs.readFileSync(path.join(DESKTOP, 'electron-builder.yml'), 'utf8');
+  const block = /to:\s*app\n\s*filter:\n((?:\s*-\s*.+\n)+)/.exec(yml);
+  assert.ok(block, '应能从 electron-builder.yml 解析出 to: app 的 filter 列表');
+  const pats = block[1].split('\n').map((l) => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean);
+  assert.ok(pats.some((p) => p.startsWith('layer/providers/')), 'filter 必须带上 layer/providers/**');
+  assert.ok(pats.some((p) => p.startsWith('layer/packs/')), 'filter 必须带上 layer/packs/tcm/**');
+
+  const pkg = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-pkg-'));
+  const appDir = path.join(pkg, 'app');
+  fs.mkdirSync(appDir, { recursive: true });
+  for (const raw of pats) {
+    const rel = raw.replace(/\/\*\*$/, '');
+    const src = path.join(REPO, rel);
+    if (!fs.existsSync(src)) continue;
+    const dst = path.join(appDir, rel);
+    if (fs.statSync(src).isDirectory()) fs.cpSync(src, dst, { recursive: true });
+    else { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(src, dst); }
+  }
+  const pkgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-pkg-home-'));
+  try {
+    const layer = installLayer({ home: pkgHome, appRoot: appDir });
+    assert.equal(layer.provider, '已安装', '按打包 filter 组装的产物里必须有 dify provider：' + JSON.stringify(layer));
+    assert.equal(layer.pack, '已安装', 'Pack 也要能装进去：' + JSON.stringify(layer));
+    assert.ok(fs.existsSync(path.join(pkgHome, 'providers', 'dify.mjs')));
+    assert.ok(fs.existsSync(path.join(pkgHome, 'packs', 'tcm', 'pack.mjs')));
+  } finally {
+    fs.rmSync(pkg, { recursive: true, force: true });
+    fs.rmSync(pkgHome, { recursive: true, force: true });
+  }
 });
 
 fs.rmSync(HOME, { recursive: true, force: true });

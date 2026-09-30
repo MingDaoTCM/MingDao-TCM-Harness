@@ -98,13 +98,19 @@ export function installLayer({ home, appRoot }) {
   ];
   for (const j of jobs) {
     try {
-      if (!fs.existsSync(j.src)) { out[j.key] = '源缺失'; continue; }
+      if (!fs.existsSync(j.src)) {
+        // 源缺失 = 这个安装包本身是残缺的（打包 filter 漏了目录就会这样）。
+        // **必须抛**：悄悄跳过的话，下一步就是"provider 指向 dify 但模块不在"，
+        // 表现要么是启动直接失败、要么是问诊绕过 Dify —— 后者正是用户报的那件事。
+        throw new Error(`安装包缺少 ${path.relative(appRoot, j.src)}（打包 extraResources 的 filter 是否漏了这一项？）`);
+      }
       if (!needsInstall(j.src, j.dst)) { out[j.key] = '已就位'; continue; }
       fs.mkdirSync(path.dirname(j.dst), { recursive: true });
       fs.rmSync(j.dst, { recursive: true, force: true });
       fs.cpSync(j.src, j.dst, { recursive: true });
       out[j.key] = fs.existsSync(j.dst) ? '已安装' : '安装失败';
     } catch (e) {
+      if (String(e?.message || '').includes('安装包缺少')) throw e; // 残缺包：不吞
       out[j.key] = `失败：${e?.message || e}`;
     }
   }
