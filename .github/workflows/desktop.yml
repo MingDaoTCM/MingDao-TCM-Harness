@@ -111,7 +111,13 @@ jobs:
           test -x dist/linux-unpacked/mingdao-tcm || { echo "缺少 dist/linux-unpacked/mingdao-tcm"; ls -la dist; exit 1; }
           # 内核首启会在 MINGDAO_HOME 建最小配置 —— 目录得先存在，否则它写不进去
           mkdir -p "$MINGDAO_HOME"
-          xvfb-run -a dist/linux-unpacked/mingdao-tcm --no-sandbox
+          # 输出留档：自动更新若加载不了会被静默降级成"手动检查"（最该防的失效），这里当场抓
+          xvfb-run -a dist/linux-unpacked/mingdao-tcm --no-sandbox 2>&1 | tee /tmp/smoke.out
+          if grep -q 'electron-updater 不可用' /tmp/smoke.out; then
+            echo "::error title=no-updater::打包产物里加载不到 electron-updater（自动更新会退化成手动检查）"
+            exit 1
+          fi
+          grep -q MINGDAO_TCM_DESKTOP_SMOKE_OK /tmp/smoke.out || { echo "::error title=smoke::未看到 SMOKE_OK"; exit 1; }
 
       # ── 直接推给站点与 Release（**不再用工件中转**）────────────────────────────
       # 为什么去掉工件：工件只是 build→publish 的搬运工，却要占仓库配额 ——
@@ -133,7 +139,8 @@ jobs:
           cd tcm/tools/tcm-ui/desktop/dist
           # 不用 mapfile：macOS runner 是 bash 3.2。排除 macOS 的 AppleDouble 垃圾（._xxx.dmg）。
           FILES=()
-          while IFS= read -r f; do FILES+=("$f"); done < <(ls -1 *.AppImage *.deb *.exe *.dmg *.zip 2>/dev/null | grep -v '^\._' | sort -u)
+          # latest*.yml 是 electron-updater 的更新元数据，必须随包一起发（自动更新要读它）
+          while IFS= read -r f; do FILES+=("$f"); done < <(ls -1 *.AppImage *.deb *.exe *.dmg *.zip latest*.yml 2>/dev/null | grep -v '^\._' | sort -u)
           if [ "${#FILES[@]}" -eq 0 ]; then echo "::error title=no-artifacts::本腿没有产物"; exit 1; fi
           echo "本腿产物："; printf '  %s\n' "${FILES[@]}"
           REPO="$GITHUB_REPOSITORY"; TAG="$GITHUB_REF_NAME"
@@ -167,6 +174,9 @@ jobs:
           N=$(gh release view "$TAG" -R "$REPO" --json assets -q '.assets|length')
           echo "  Release 资产共 $N 个"
           [ "$N" -ge 5 ] || { echo "::error title=release-assets::Release 资产过少（$N 个）"; exit 1; }
+          # 自动更新依赖 latest*.yml —— 少了它，客户端永远"已是最新"（静默失效）
+          gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name' | grep -q '^latest' \
+            || { echo "::error title=no-update-meta::Release 里没有 latest*.yml，自动更新不可用"; exit 1; }
 
           if [ -z "${TCM_SSH_KEY:-}" ]; then
             echo "::notice::未配置 TCM_DEPLOY_SSH_KEY，跳过站点推送（可用 site/deploy.sh 补）"; exit 0
@@ -178,6 +188,7 @@ jobs:
           rm -f "$DL"/*.yml "$DL"/*.blockmap 2>/dev/null || true
           # 页面只按 dmg/exe/deb/AppImage 展示；zip 是自动更新用的，白占慢带宽（仍在 Release 里）
           SITE_FILES=()
+          # 站点推：安装包（不含 zip）+ 更新元数据 latest*.yml（自动更新要从站点读）
           while IFS= read -r f; do case "$f" in *.zip) ;; *) SITE_FILES+=("$f");; esac; done < <(ls -1 "$DL" | sort)
           printf '  推站点：\n'; printf '    %s\n' "${SITE_FILES[@]}"
 

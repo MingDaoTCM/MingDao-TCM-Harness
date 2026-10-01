@@ -1,9 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!--
-    托盘图标专用：**刻意简化**。icon.svg 的波形在 16px 下会糊成一团，
-    小尺寸只保留「一个主峰 + 基线」这一件事，保证托盘里一眼能认。
-    背景同样简化成透明底 + 白色波形？不行 —— 浅色托盘上看不见，所以保留玉青圆角底。
-  -->
+  <!-- 托盘图标：同一个太极，刻意简化（小尺寸下"一圆 + S 形分界"仍成立） -->
   <defs>
     <linearGradient id="jade-tray" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#17c3a2"/>
@@ -11,7 +7,8 @@
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#jade-tray)"/>
-  <path d="M64 274 H150 L200 300 L258 108 L316 274 H448"
-        fill="none" stroke="#ffffff" stroke-width="46"
-        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="256" r="164" fill="#ffffff"/>
+  <path d="M256 92 A82 82 0 0 1 256 256 A82 82 0 0 0 256 420 A164 164 0 0 1 256 92 Z" fill="url(#jade-tray)"/>
+  <circle cx="256" cy="174" r="30" fill="#ffffff"/>
+  <circle cx="256" cy="338" r="30" fill="url(#jade-tray)"/>
 </svg>

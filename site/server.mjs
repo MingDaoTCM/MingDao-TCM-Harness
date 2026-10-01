@@ -30,6 +30,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { listPosts, submit as submitPost, deletePost } from './forum.mjs';
 
 const PORT = Number(process.env.TCM_PORT || 8448);
 const ROOT = process.env.TCM_ROOT || path.join(import.meta.dirname, 'public');
@@ -346,6 +347,28 @@ const server = http.createServer(async (req, res) => {
 
   // ── 公开资源（登录页也要用图标/样式）
   if (p === '/favicon.ico' || p === '/apple-touch-icon.png' || p.startsWith('/assets/')) return serveAsset(res, p);
+  // 站内静态页（使用帮助等）**始终公开**：桌面版菜单「帮助 → 使用帮助」直接指过来，
+  // 不该因为站点上锁就点不开（帮助文档本身不是敏感内容）。
+  if (/^\/[A-Za-z0-9_-]+\.html$/.test(p) && p !== '/index.html') return serveAsset(res, p);
+
+  // ── 社区论坛（公开；发帖限速，删帖要管理员密码）
+  if (p === '/forum' || p === '/forum/') return serveAsset(res, '/forum.html');
+  if (p === '/api/forum/posts') {
+    if (req.method === 'GET') return sendJson(res, 200, { ok: true, ...listPosts(DATA) });
+    if (req.method === 'POST') {
+      const body = await readJson(req);
+      const r = submitPost(DATA, clientIp(req), body || {});
+      return sendJson(res, r.ok ? 200 : 400, r);
+    }
+    return sendJson(res, 405, { ok: false, error: '只支持 GET / POST' });
+  }
+  if (p === '/api/forum/delete' && req.method === 'POST') {
+    // 删帖是**破坏性操作**：公开站点上必须只有管理员能做（密码校验与后台同源）
+    const body = await readJson(req);
+    if (!verifyPw(String(body?.current || ''), auth.admin)) return sendJson(res, 401, { ok: false, error: '管理员密码不正确' });
+    const r = deletePost(DATA, body?.id);
+    return sendJson(res, r.ok ? 200 : 400, r);
+  }
 
   // ── 登录 / 登出 / 状态
   if (p === '/api/login' && req.method === 'POST') {

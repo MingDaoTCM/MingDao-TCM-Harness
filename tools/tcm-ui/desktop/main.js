@@ -50,11 +50,56 @@ function fail(msg, silent) {
 // 集中一处才好改，也便于在打包时用环境变量指向测试环境。
 const SITE_URL = (process.env.MINGDAO_TCM_SITE || 'https://tcm.mingdao.ai').replace(/\/+$/, '');
 // 问题反馈：默认用明道社区论坛（与上游桌面版指向同一个地方）。
-const FEEDBACK_URL = process.env.MINGDAO_TCM_FEEDBACK_URL || 'https://harness.mingdao.ai/forum/';
+const FEEDBACK_URL = process.env.MINGDAO_TCM_FEEDBACK_URL || `${SITE_URL}/forum/`;
 const openExternal = (url) => shell.openExternal(url).catch((e) => {
   // 打不开要**说出来**：静默失败会让医师以为"点了没反应"
   dialog.showErrorBox(APP_NAME, `无法打开链接：${url}\n${e?.message || e}`);
 });
+
+/**
+ * 自动更新（对齐上游桌面版：装完就不用再手动下载）。
+ *
+ * 为什么走站点而不是 GitHub：仓库是私有的，客户端读不到 Release。
+ * electron-builder 会为每个平台生成 `latest*.yml`（记录版本与安装包地址），
+ * 我们把它与安装包一起发到站点 `downloads/`，这里用 generic 源指过去。
+ *
+ * 三条与"手动检查"一致的纪律：**任何路径都要有痕迹**（成功/失败都打日志）、
+ * 有超时兜底、开发态与显式禁用时直接跳过（`MINGDAO_TCM_NO_AUTOUPDATE=1`）。
+ * 失败**不打扰医师**：自动更新是后台的事，坏了自己下次再试；只有"已下载完成"才弹窗。
+ */
+let updater = null;
+async function initAutoUpdate() {
+  if (!app.isPackaged) return null;                       // 开发态没有更新元数据
+  if (process.env.MINGDAO_TCM_NO_AUTOUPDATE === '1') { console.log('[update] 已禁用（环境变量）'); return null; }
+  try {
+    const mod = await import('electron-updater');
+    updater = mod.autoUpdater;
+  } catch (/** @type {any} */ e) {
+    console.warn('[update] electron-updater 不可用，退回"检查更新"：' + (e?.message || e));
+    return null;
+  }
+  try {
+    updater.autoDownload = true;
+    updater.autoInstallOnAppQuit = true;
+    updater.on('error', (/** @type {any} */ e) => console.warn('[update] 更新失败（不影响使用）：' + (e?.message || e)));
+    updater.on('update-available', (/** @type {any} */ i) => console.log(`[update] 发现新版本 ${i?.version}，后台下载中…`));
+    updater.on('update-not-available', () => console.log('[update] 已是最新版本'));
+    updater.on('update-downloaded', (/** @type {any} */ i) => {
+      dialog.showMessageBox(win ?? undefined, {
+        type: 'info', title: '更新已就绪',
+        message: `新版本 v${i?.version || '?'} 已下载完成`,
+        detail: '重启应用即可生效。选择「稍后」则本次退出时自动安装。',
+        buttons: ['立即重启并更新', '稍后'], defaultId: 0, cancelId: 1,
+      }).then((r) => {
+        if (r?.response === 0) { try { updater.quitAndInstall(); } catch (/** @type {any} */ e) { console.warn('[update] 安装失败：' + (e?.message || e)); } }
+      }).catch(() => {});
+    });
+    await updater.checkForUpdates();
+  } catch (/** @type {any} */ e) {
+    console.warn('[update] 启动检查失败（不影响使用）：' + (e?.message || e));
+  }
+  return updater;
+}
 
 /**
  * 「检查更新」。逻辑在 orchestrator 的 `checkForUpdate`（纯 Node，有单测）；
@@ -66,6 +111,15 @@ const openExternal = (url) => shell.openExternal(url).catch((e) => {
 async function checkUpdates() {
   const show = (opts) => dialog.showMessageBox(win ?? undefined, opts).catch(() => {});
   const cur = app.getVersion();
+  // 装了自动更新器就交给它：它会下载并在下完后弹「立即重启并更新」
+  if (updater) {
+    try {
+      await updater.checkForUpdates();
+      return show({ type: 'info', title: '检查更新', message: `当前版本 v${cur}`, detail: '正在检查/下载，完成后会提示重启；若已是最新则无提示。' });
+    } catch (/** @type {any} */ e) {
+      console.warn('[update] 手动检查失败：' + (e?.message || e));
+    }
+  }
   const r = await checkForUpdate({ siteUrl: SITE_URL, current: cur });
 
   if (r.status === 'disabled') {
@@ -123,10 +177,11 @@ function buildAppMenu() {
     {
       label: '帮助',
       submenu: [
-        { label: '下载页（内部站点）', click: () => openExternal(`${SITE_URL}/`) },
+        { label: '官网', click: () => openExternal(`${SITE_URL}/`) },
         { label: '检查更新', click: () => checkUpdates() },
-        { type: 'separator' },
-        { label: '问题反馈', click: () => openExternal(FEEDBACK_URL) },
+        // 「检查更新」与「问题反馈」之间原来是分隔线留下的一段空白 —— 补上使用帮助（站点上的页）
+        { label: '使用帮助', click: () => openExternal(`${SITE_URL}/help.html`) },
+        { label: '问题反馈（社区论坛）', click: () => openExternal(FEEDBACK_URL) },
         {
           label: `关于 ${APP_NAME}`,
           click: () => dialog.showMessageBox(win ?? undefined, {
@@ -220,6 +275,8 @@ if (!app.requestSingleInstanceLock()) {
       else app.quit();
       return;
     }
+    // 自动更新：装完就不用再手动下载（后台检查，失败不打扰）
+    initAutoUpdate().catch(() => {});
     // 菜单**在冒烟分支之前**就建好：CI 那次 xvfb 冒烟于是也覆盖了菜单模板。
     // 否则这几十行菜单代码在本机与 CI 里都没跑过 —— 一次运行期错误要等医师打开才发现。
     // 托盘菜单早就在用同一个 Menu.buildFromTemplate，这条路在无头环境里是通的。

@@ -17,12 +17,19 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
 import datetime
 
 KEEP = ('.exe', '.dmg', '.zip', '.AppImage', '.deb')
+
+
+# 自动更新元数据（electron-builder 生成的 latest*.yml）：要随包一起上站点，
+# 但**不进页面清单**（它不是给人点的安装包）。
+def is_update_meta(name):
+    return bool(re.match(r'^latest.*\.ya?ml$', name))
 
 
 def is_installer(name):
@@ -131,7 +138,7 @@ def main():
             # 若把 zip 也算进来，会永远判定"缺文件"→ 拒绝写清单 → 页面空白。
             # 2026-10-01 实测踩到：v0.1.9 五个包都传上去了，清单却因为这条一直不生成。
             return {x['name']: x['size'] for x in rel.get('assets', [])
-                    if is_installer(x['name']) and not x['name'].endswith('.zip')}
+                    if (is_installer(x['name']) and not x['name'].endswith('.zip')) or is_update_meta(x['name'])}
         except Exception as e:  # noqa: BLE001 —— 取不到不该挡住写清单（会退化为粗检并告警）
             print('  ! 取 Release 资产大小失败（退化为粗检）：%s' % e, flush=True)
             return None
@@ -145,7 +152,7 @@ def main():
         for n in list(os.listdir(d)):
             if n == 'manifest.json':
                 continue
-            stale = n.startswith('._') or (is_installer(n) and ver not in n)
+            stale = n.startswith('._') or ((is_installer(n) or is_update_meta(n)) and ver not in n and not is_update_meta(n))
             if stale:
                 try:
                     os.unlink(os.path.join(d, n))
@@ -167,8 +174,10 @@ def main():
 
         files = []
         for n in sorted(os.listdir(d)):
-            if not is_installer(n):
+            if not (is_installer(n) or is_update_meta(n)):
                 continue
+            if is_update_meta(n):
+                continue          # 更新元数据只校验存在与大小，不进清单
             p = os.path.join(d, n)
             size = os.path.getsize(p)
             if want is not None and size != want[n]:

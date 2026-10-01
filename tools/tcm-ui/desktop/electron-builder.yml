@@ -59,6 +59,12 @@ extraResources:
   # - from: ${env.MINGDAO_KERNEL}/src
   #   to: kernel/src
 
+# 自动更新源：站点上的 downloads/（与安装包同目录，放 electron-builder 生成的 latest*.yml）。
+# 必须是**站点**而不是 GitHub —— 仓库是私有的，客户端读不到 Release。
+publish:
+  provider: generic
+  url: https://tcm.mingdao.ai/downloads/
+
 asar: true
 npmRebuild: false
 

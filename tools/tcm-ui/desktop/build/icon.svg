@@ -1,39 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <!--
     明道中医 · 问诊台 应用图标
-    刻意与上游 MingDao-Harness 的图标区分：
-      上游 = 亮绿→青渐变 + 三条黑竖条 + 一个圆点；
-      本图 = 玉青→深青渐变 + **白色脉象波形**（取中医「切诊·脉象」，含一个重搏小波）。
-    同一品牌语系（同样的圆角方形与渐变语汇），但图形语言完全不同。
+    上一版是"脉象波形"—— 辨识度够，但看着像通用心电/健身图标，缺中医味（用户反馈）。
+    这一版用**太极（阴阳）**：中医最直白的视觉符号，任何尺寸下都认得出，
+    且与上游 MingDao-Harness 的"三条黑竖条 + 圆点"完全不同。
+    底：沿用品牌玉青渐变（同一语系）；图：白色太极 + 两枚鱼眼（用底色透出）。
   -->
   <defs>
     <linearGradient id="jade" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#17c3a2"/>
       <stop offset="1" stop-color="#0b6e8f"/>
     </linearGradient>
-    <!-- 内圈微光，避免大面积纯渐变显得平 -->
     <radialGradient id="glow" cx="0.28" cy="0.22" r="0.85">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
   </defs>
-
   <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#jade)"/>
   <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#glow)"/>
-
-  <!-- 脉象：基线 → 起搏 → 重搏小波 → 主峰（高尖）→ 回落 → 基线 -->
-  <path d="M58 274
-           H132
-           L170 232
-           L206 318
-           L250 116
-           L292 274
-           L324 250
-           L352 274
-           H454"
-        fill="none" stroke="#ffffff" stroke-width="30"
-        stroke-linecap="round" stroke-linejoin="round"/>
-
-  <!-- 脉点：主峰上方一点（寸口「浮中沉」之意），小尺寸下会自然糊掉，不影响辨识 -->
-  <circle cx="250" cy="76" r="17" fill="#ffffff" fill-opacity="0.92"/>
+  <circle cx="256" cy="256" r="152" fill="#ffffff"/>
+  <path d="M256 104 A76 76 0 0 1 256 256 A76 76 0 0 0 256 408 A152 152 0 0 1 256 104 Z" fill="url(#jade)"/>
+  <circle cx="256" cy="180" r="27" fill="#ffffff"/>
+  <circle cx="256" cy="332" r="27" fill="url(#jade)"/>
 </svg>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>社区论坛 · 明道中医问诊台</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  :root{--bg:#0b0e14;--bg2:#10141d;--bg3:#161b27;--border:#242b3a;--text:#e8ecf4;--dim:#98a2b8;--faint:#5c6679;
+        --jade:#14b8a6;--jade2:#17c3a2;--red:#ff6b6b;--code:#0d1017}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--jade);text-decoration:none}a:hover{text-decoration:underline}
+  .wrap{max-width:860px;margin:0 auto;padding:0 22px}
+  header{position:sticky;top:0;z-index:9;background:rgba(11,14,20,.9);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  header .wrap{display:flex;align-items:center;gap:14px;height:60px}
+  header img{width:28px;height:28px;border-radius:8px}
+  header b{font-size:15px}
+  header nav{margin-left:auto;display:flex;gap:16px;font-size:14px}
+  header nav a{color:var(--dim)}
+  h1{font-size:24px;margin:30px 0 4px}
+  .sub{color:var(--dim);margin:0 0 22px;font-size:14px}
+  .card{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin:0 0 14px}
+  input,textarea{width:100%;background:var(--code);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:9px 11px;font:14px/1.6 inherit;outline:none}
+  input:focus,textarea:focus{border-color:var(--jade)}
+  textarea{min-height:96px;resize:vertical}
+  label{display:block;font-size:12.5px;color:var(--dim);margin:8px 0 4px}
+  button{background:linear-gradient(135deg,var(--jade2),#0b6e8f);border:0;color:#04120f;font-weight:700;
+    border-radius:8px;padding:9px 18px;font:14px inherit;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid var(--border);color:var(--text);font-weight:400}
+  button:hover{filter:brightness(1.06)}
+  .row{display:flex;gap:10px;align-items:center;margin-top:10px}
+  .sp{flex:1}
+  .msg{font-size:13px;min-height:18px;margin-top:8px}
+  .ok{color:var(--jade)}.err{color:var(--red)}.dim{color:var(--dim)}
+  .post{border-bottom:1px solid var(--border);padding:16px 0}
+  .post:last-child{border-bottom:0}
+  .ph{display:flex;align-items:baseline;gap:10px}
+  .ph b{font-size:15.5px}
+  .ph .meta{color:var(--faint);font-size:12px}
+  .body{white-space:pre-wrap;margin:6px 0 0;color:#cfd8e3;font-size:14px}
+  .replies{margin:10px 0 0 14px;border-left:2px solid var(--border);padding-left:12px}
+  .reply{padding:6px 0;font-size:14px}
+  .reply .meta{color:var(--faint);font-size:12px}
+  .reply .body{margin:2px 0 0}
+  footer{border-top:1px solid var(--border);margin-top:40px;padding:24px 0 38px;color:var(--faint);font-size:13px}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <img src="/assets/icon.png" alt="" />
+  <b>明道中医 · 社区论坛</b>
+  <nav><a href="/">下载</a><a href="/help.html">使用帮助</a><a href="/forum/">论坛</a></nav>
+</div></header>
+
+<div class="wrap">
+  <h1>社区论坛</h1>
+  <p class="sub">使用问题、经验交流、需求与缺陷反馈都发在这里。<b>发帖不需要账号</b>，填个昵称即可；请勿粘贴患者信息或任何密钥。</p>
+
+  <div class="card">
+    <b>发新帖</b>
+    <label>昵称（可留空，默认「匿名」）</label>
+    <input id="nTitleName" maxlength="20" placeholder="例如：李医师" />
+    <label>标题</label>
+    <input id="nTitle" maxlength="80" placeholder="一句话说清问题或主题" />
+    <label>正文</label>
+    <textarea id="nBody" maxlength="4000" placeholder="复现步骤 / 期望结果 / 实际结果；版本号可在这里写（菜单「帮助 → 关于」）。"></textarea>
+    <div class="row"><button id="btnPost">发布</button><span class="msg" id="mPost"></span></div>
+  </div>
+
+  <div id="list"><div class="dim">加载中…</div></div>
+</div>
+
+<footer><div class="wrap">© 2026 明道中医 · <a href="/">下载页</a> · <a href="/help.html">使用帮助</a></div></footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (t) => { try { return new Date(t).toLocaleString('zh-CN', { hour12: false }); } catch { return t; } };
+const say = (el, text, kind = '') => { const n = $(el); n.className = 'msg ' + kind; n.textContent = text; };
+
+async function load() {
+  const box = $('#list');
+  try {
+    const r = await fetch('/api/forum/posts', { cache: 'no-store' });
+    const j = await r.json();
+    if (!j.ok) { box.innerHTML = '<div class="card err">论坛读取失败：' + esc(j.error || '未知错误') + '</div>'; return; }
+    if (!j.posts.length) { box.innerHTML = '<div class="card dim">还没有帖子 —— 欢迎发第一帖。</div>'; return; }
+    box.innerHTML = j.posts.map((p) => `
+      <div class="card">
+        <div class="ph"><b>${esc(p.title)}</b><span class="sp"></span>
+          <span class="meta">${esc(p.name)} · ${esc(fmt(p.at))}</span>
+          <button class="ghost" style="padding:2px 10px;font-size:12px" data-del="${esc(p.id)}">删除</button>
+        </div>
+        <p class="body">${esc(p.body)}</p>
+        ${p.replies.length ? `<div class="replies">${p.replies.map((r) => `
+          <div class="reply"><span class="meta">${esc(r.name)} · ${esc(fmt(r.at))}</span>
+            <p class="body">${esc(r.body)}</p></div>`).join('')}</div>` : ''}
+        <div class="row">
+          <input data-rname="${esc(p.id)}" maxlength="20" placeholder="昵称" style="max-width:140px" />
+          <input data-rbody="${esc(p.id)}" maxlength="4000" placeholder="回复…" />
+          <button class="ghost" data-reply="${esc(p.id)}">回复</button>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    box.innerHTML = '<div class="card err">论坛读取失败：' + esc(e?.message || e) + '</div>';
+  }
+}
+
+$('#btnPost').onclick = async () => {
+  say('#mPost', '发布中…', 'dim');
+  const r = await fetch('/api/forum/posts', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'post', name: $('#nTitleName').value, title: $('#nTitle').value, body: $('#nBody').value }),
+  });
+  const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+  if (!j.ok) { say('#mPost', '✗ ' + (j.error || '发布失败'), 'err'); return; }
+  $('#nTitle').value = ''; $('#nBody').value = '';
+  say('#mPost', '✓ 已发布', 'ok');
+  load();
+};
+
+document.addEventListener('click', async (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLElement)) return;
+  const replyId = t.dataset.reply;
+  const delId = t.dataset.del;
+  if (replyId) {
+    const name = document.querySelector(`[data-rname="${replyId}"]`).value;
+    const body = document.querySelector(`[data-rbody="${replyId}"]`).value;
+    const r = await fetch('/api/forum/posts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'reply', postId: replyId, name, body }),
+    });
+    const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+    if (!j.ok) { alert('回复失败：' + (j.error || '')); return; }
+    load();
+  }
+  if (delId) {
+    const pw = prompt('删除帖子需要管理员密码：');
+    if (!pw) return;
+    const r = await fetch('/api/forum/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: delId, current: pw }),
+    });
+    const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+    if (!j.ok) { alert('删除失败：' + (j.error || '')); return; }
+    load();
+  }
+});
+
+load();
+</script>
+</body>
+</html>

@@ -119,6 +119,17 @@ await testAsync('带会话再访问 / → 拿到真正的首页', async () => {
   assert.match(html, /明道中医/);
 });
 
+await testAsync('★ 使用帮助页始终公开（桌面版菜单直指它，不该被密码门挡住）', async () => {
+  const saved = jar.tcm_session;
+  clearJar();                                   // 未登录状态
+  const r = await req('/help.html', { auth: false });
+  assert.equal(r.status, 200, '帮助页应免登录可看');
+  const html = await r.text();
+  assert.match(html, /使用帮助/);
+  assert.match(html, /第一次启动：填密钥/, '帮助页要讲清"密钥自己填"这件事');
+  jar.tcm_session = saved;
+});
+
 console.log('\n[2] 安装包下载（必须登录）');
 await testAsync('/api/downloads 未登录 → 401', async () => {
   const saved = jar.tcm_session;
@@ -263,6 +274,68 @@ await testAsync('当前密码不对 → 401；新密码太短 → 400', async ()
     body: JSON.stringify({ target: 'site', current: 'new-site-pw-10', next: '123' }),
   });
   assert.equal(short.status, 400, '太短的新密码应被拒');
+});
+
+console.log('\n[3b] 社区论坛');
+await testAsync('★ 发帖/回帖公开可用；删帖必须管理员密码', async () => {
+  clearJar();
+  let j = await (await req('/api/forum/posts', { auth: false })).json();
+  assert.equal(j.ok, true);
+  assert.equal(j.posts.length, 0, '开始应该是空论坛');
+
+  const post = async (b) => (await req('/api/forum/posts', {
+    method: 'POST', auth: false, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b),
+  })).json();
+
+  let r = await post({ action: 'post', name: '李医师', title: '复诊对比怎么看', body: '在患者页点开历次病历即可。' });
+  assert.equal(r.ok, true, r.error);
+  r = await post({ action: 'post', title: '', body: 'x' });
+  assert.equal(r.ok, false, '空标题应被拒');
+
+  j = await (await req('/api/forum/posts', { auth: false })).json();
+  assert.equal(j.posts.length, 1);
+  assert.equal(j.posts[0].name, '李医师');
+  const id = j.posts[0].id;
+
+  r = await post({ action: 'reply', postId: id, name: '王医师', body: '谢谢，找到了。' });
+  assert.equal(r.ok, true, r.error);
+  j = await (await req('/api/forum/posts', { auth: false })).json();
+  assert.equal(j.posts[0].replies.length, 1, '回帖应挂在该帖下');
+
+  // 删帖：没有管理员密码必须被挡（公开站点不能让人随手删别人的帖子）
+  let d = await (await req('/api/forum/delete', {
+    method: 'POST', auth: false, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, current: 'wrong' }),
+  })).json();
+  assert.equal(d.ok, false, '错密码不能删帖');
+  // 注意：前面的 [3] 已经把管理员密码改成 admin-pw-A（初始密码只用于首登）
+  d = await (await req('/api/forum/delete', {
+    method: 'POST', auth: false, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, current: 'admin-pw-A' }),
+  })).json();
+  assert.equal(d.ok, true, '管理员密码应能删帖：' + JSON.stringify(d));
+  j = await (await req('/api/forum/posts', { auth: false })).json();
+  assert.equal(j.posts.length, 0);
+});
+await testAsync('★ 发帖内容按**纯文本**处理：页面必须转义（XSS 入口）', async () => {
+  // 服务端存原文（不擅自改写用户内容），所以**页面侧必须转义** —— 这条守住它。
+  const html = fs.readFileSync(path.join(SITE, 'public', 'forum.html'), 'utf8');
+  for (const t of ['esc(p.title)', 'esc(p.body)', 'esc(r.name)', 'esc(r.body)']) {
+    assert.ok(html.includes(t), `forum.html 必须对 ${t} 做转义`);
+  }
+  assert.match(html, /replace\(\/\[&<>"'\]\/g/, '应有 HTML 转义函数');
+  // 发帖是公开的 → 页面里不能把用户内容塞进 innerHTML 而不转义
+  assert.ok(!/innerHTML\s*=\s*[^`'"]*\$\{(?!esc\()/.test(html), '不得有未转义的插值写入 innerHTML');
+});
+await testAsync('★ 发帖限速：短时间内连发会被挡', async () => {
+  clearJar();
+  let blocked = false;
+  for (let i = 0; i < 8; i++) {
+    const j = await (await req('/api/forum/posts', {
+      method: 'POST', auth: false, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'post', title: '压力测试 ' + i, body: '内容内容' }),
+    })).json();
+    if (!j.ok && /频繁/.test(j.error || '')) { blocked = true; break; }
+  }
+  assert.ok(blocked, '连发应触发限速');
 });
 
 console.log('\n[4] 页面观感（能失败的那部分）');
