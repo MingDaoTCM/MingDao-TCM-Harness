@@ -113,21 +113,67 @@ def main():
     if not token and not a.manifest_only:  # --manifest-only 只算哈希，不需要 token
         raise SystemExit('缺少 token（--token-file / --token-stdin / GH_TOKEN）')
 
-    def main_manifest_only(tag, d):
-        # 顺手清掉 AppleDouble 垃圾（macOS 打包的副产物，不是安装包）
+    # 安装包不可能小于这个体积（最小的 Windows 包也有 ~70MB）。
+    # 低于它只可能是**传了一半**的文件 —— 2026-09-30 实测踩到：被取消的构建在站点上
+    # 留下 4 个半截文件（"deb" 只有 4.6MB），而清单照样把它们列成可下载的安装包
+    # → 医师下到的是坏包。宁可**拒绝写清单**（页面显示"尚未上传"），也不要提供坏包。
+    MIN_INSTALLER_BYTES = 1 << 20
+
+    def expected_sizes(tag, token):
+        """从 GitHub Release 取 {文件名: 字节数}，用于**精确对账**。
+        为什么不只靠"文件太小"判断：半截文件可能有好几 MB（实测 4.6MB 的"deb"），
+        粗阈值拦不住；Release 上的大小才是唯一权威。取不到就返回 None（退化为粗检）。"""
+        if not a.repo or not token:
+            return None
+        try:
+            rel = json.load(api('https://api.github.com/repos/%s/releases/tags/%s' % (a.repo, tag), token))
+            return {x['name']: x['size'] for x in rel.get('assets', []) if is_installer(x['name'])}
+        except Exception as e:  # noqa: BLE001 —— 取不到不该挡住写清单（会退化为粗检并告警）
+            print('  ! 取 Release 资产大小失败（退化为粗检）：%s' % e, flush=True)
+            return None
+
+    def main_manifest_only(tag, d, token=''):
+        ver = tag.lstrip('v')
+        want = expected_sizes(tag, token)
+        # ① 清掉 AppleDouble 垃圾（macOS 打包副产物）与**其它版本**的残留。
+        #    别的版本的半截文件留着毫无用处，而它们会被下面的扫描当成"本站点的包"。
+        dropped = []
         for n in list(os.listdir(d)):
-            if n.startswith('._'):
+            if n == 'manifest.json':
+                continue
+            stale = n.startswith('._') or (is_installer(n) and ver not in n)
+            if stale:
                 try:
                     os.unlink(os.path.join(d, n))
-                    print('  ✗ 清掉垃圾文件：%s' % n, flush=True)
+                    dropped.append(n)
                 except OSError:
                     pass
+        for n in dropped:
+            print('  ✗ 清掉不属于本版本/垃圾文件：%s' % n, flush=True)
+
+        # ② 精确对账：与 Release 上的大小不一致 = 传了一半，**拒绝写清单**
+        #    （页面于是显示"尚未上传"，而不是提供一个装不上的包）
+        if want is not None:
+            for n in sorted(os.listdir(d)):
+                if is_installer(n) and n not in want:
+                    raise SystemExit('%s 不在 Release %s 的资产里 —— 拒绝写清单' % (n, tag))
+            missing = [n for n in want if not os.path.exists(os.path.join(d, n))]
+            if missing:
+                raise SystemExit('站点缺少 Release 里的：%s —— 拒绝写清单' % ', '.join(missing))
+
         files = []
         for n in sorted(os.listdir(d)):
             if not is_installer(n):
                 continue
             p = os.path.join(d, n)
-            files.append({'name': n, 'size': os.path.getsize(p), 'sha256': sha256(p)})
+            size = os.path.getsize(p)
+            if want is not None and size != want[n]:
+                raise SystemExit('%s 大小 %d 与 Release 的 %d 不符 —— 像是传了一半，拒绝写清单'
+                                 % (n, size, want[n]))
+            if size < MIN_INSTALLER_BYTES:
+                raise SystemExit('%s 只有 %d 字节（< %d）—— 像是传了一半，拒绝写清单'
+                                 % (n, size, MIN_INSTALLER_BYTES))
+            files.append({'name': n, 'size': size, 'sha256': sha256(p)})
         if not files:
             raise SystemExit('downloads/ 里没有安装包，拒绝写空清单')
         manifest = {
@@ -142,7 +188,7 @@ def main():
         print('  ✓ manifest.json 已重算（%d 个文件）' % len(files), flush=True)
 
     if a.manifest_only:
-        main_manifest_only(a.tag, a.dir)
+        main_manifest_only(a.tag, a.dir, token)
         return
 
     if not a.repo:

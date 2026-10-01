@@ -194,5 +194,10 @@ jobs:
             | ssh $SSHOPT "$TARGET" 'tar -xf - -C /opt/1panel/www/sites/tcm-site/downloads/ && ls -la /opt/1panel/www/sites/tcm-site/downloads/ | tail -9'
           # 让**服务器自己**重算 manifest（sha256/大小由服务器算，避免两边口径不一）
           scp -q $SSHOPT site/fetch-assets.py "$TARGET:/opt/mingdao/tcm-fetch-assets.py"
-          ssh $SSHOPT "$TARGET" "python3 /opt/mingdao/tcm-fetch-assets.py --tag '$TAG' --dir /opt/1panel/www/sites/tcm-site/downloads --manifest-only"
+          # 写清单时**与 Release 的资产大小精确对账**：对不上（传了一半）就拒绝写 ——
+          # 页面于是显示"尚未上传"，而不是提供一个装不上的包。
+          # token 落 0600 临时文件、脚本读完即删（不进 argv/ps）。
+          ssh $SSHOPT "$TARGET" "umask 077 && cat > /opt/mingdao/.tcm-token" <<<"$GH_TOKEN"
+          ssh $SSHOPT "$TARGET" "python3 /opt/mingdao/tcm-fetch-assets.py --repo '$REPO' --tag '$TAG' --dir /opt/1panel/www/sites/tcm-site/downloads --manifest-only --token-file /opt/mingdao/.tcm-token"
+          ssh $SSHOPT "$TARGET" "rm -f /opt/mingdao/.tcm-token" || true
           echo "站点版本端点："; curl -s -m 20 "https://tcm.mingdao.ai/api/latest" | sed 's/^/  /'
