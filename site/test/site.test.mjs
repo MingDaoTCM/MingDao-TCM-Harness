@@ -283,6 +283,45 @@ await testAsync('★ 下载按钮统一样式：不许有次级/特殊样式，�
   assert.ok(!/background\s*:\s*transparent/i.test(m[1]), '.dbtn 不能是透明底');
 });
 
+console.log('\n[4b] 公开访问模式（TCM_PUBLIC=1）');
+// 同一份代码两种模式：上锁（默认，上面全测过了）与公开（分发页）。
+// 关键：公开的是**产品页与安装包**，不是后台 —— /admin 仍然要管理员密码。
+await testAsync('★ 公开模式：首页直接是首页、清单与下载都免登录，但后台仍要密码', async () => {
+  const PORT2 = PORT + 1;
+  const BASE2 = `http://127.0.0.1:${PORT2}`;
+  const child2 = spawn(process.execPath, [path.join(SITE, 'server.mjs')], {
+    env: { ...process.env, TCM_PORT: String(PORT2), TCM_ROOT: ROOT, TCM_DATA: DATA, TCM_INIT_PASSWORD: 'pub-init-pw', TCM_TRUST_PROXY: '0', TCM_PUBLIC: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const up = async () => { for (let i = 0; i < 60; i++) { try { const r = await fetch(BASE2 + '/api/session'); if (r.ok) return true; } catch {} await new Promise((r) => setTimeout(r, 150)); } return false; };
+  try {
+    assert.ok(await up(), '公开模式实例未起来');
+    const sess = await (await fetch(BASE2 + '/api/session')).json();
+    assert.equal(sess.public, true, '/api/session 应报告当前是公开模式');
+
+    const home = await fetch(BASE2 + '/');
+    const html = await home.text();
+    assert.equal(home.status, 200);
+    assert.match(html, /下载桌面版/, '公开模式首页应直接是产品页，不是登录页');
+    assert.ok(!/需要访问密码/.test(html), '公开模式不该再出现登录页');
+
+    const dl = await fetch(BASE2 + '/api/downloads');
+    assert.equal(dl.status, 200, '安装包清单应免登录');
+    const j = await dl.json();
+    assert.ok(j.files.length > 0, '清单应有内容');
+
+    const one = await fetch(BASE2 + '/downloads/' + j.files[0].name);
+    assert.equal(one.status, 200, '安装包本体应免登录可下');
+    assert.match(String(one.headers.get('content-disposition')), /attachment/);
+
+    // 后台仍然要密码：未登录访问 /admin 应被挡（302 回首页）
+    const adm = await fetch(BASE2 + '/admin', { redirect: 'manual' });
+    assert.equal(adm.status, 302, '公开模式下后台也必须挡住');
+  } finally {
+    child2.kill('SIGTERM');
+  }
+});
+
 console.log('\n[5] 在线爆破限速');
 await testAsync('同一 IP 连续试错 → 第 9 次起 429', async () => {
   clearJar();

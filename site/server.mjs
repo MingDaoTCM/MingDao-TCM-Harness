@@ -12,7 +12,13 @@
 //   GET  /api/session       当前登录状态（前端用来决定显示什么）
 //   GET  /api/downloads     安装包清单（由 deploy.sh 生成的 manifest.json）
 //   GET  /downloads/<文件>  安装包本体（**必须已登录**，否则 302 回登录页）
-//   GET  /admin             后台（**独立的管理员密码**）：改访问密码 / 改管理员密码
+//   GET  /admin             后台（**独立的管理员密码**）：改访问密码 / 改管理员密码 / 切换公开访问
+//
+// ── 公开 / 上锁（同一个站点两种模式，用开关而不是删代码）─────────────────────────
+//   TCM_PUBLIC=1（或后台把 auth.json 的 public 置 true）→ **公开站点**：
+//     首页、安装包清单、安装包本体都免登录（适合"扫码就能下"的分发页）。
+//   默认（未设）→ **上锁**：首页先过访问密码，清单与下载都要登录。
+//   两种模式下 /admin 都需要管理员密码 —— 公开的是产品页，不是后台。
 //   POST /api/admin/password   { current, next, target: 'site'|'admin' }
 //
 // 安全上的取舍（写出来，免得被当成疏漏）：
@@ -277,11 +283,28 @@ a{color:var(--jade)}
   <div class="msg" id="m2"></div>
 </div>
 <div class="card">
+  <h2 style="margin-top:0">站点访问模式</h2>
+  <p class="meta">当前：<b>${masked.public ? '公开访问' : '需要访问密码'}</b>${masked.envFixed ? '（已由环境变量 TCM_PUBLIC 固定，后台改不动）' : ''}</p>
+  <p class="meta">公开后：首页、安装包清单与安装包本体都免登录；<b>本后台仍然需要管理员密码</b>。</p>
+  <label>管理员密码（确认身份）</label><input id="c3" type="password" autocomplete="current-password"/>
+  <button onclick="setGate(true)">设为公开访问</button>
+  <button class="ghost" onclick="setGate(false)">设为需要密码</button>
+  <div class="msg" id="m3"></div>
+</div>
+<div class="card">
   <h2 style="margin-top:0">安装包</h2>
   <p class="meta">安装包由发布流程上传到 <code>downloads/</code>；清单见 <a href="/api/downloads" target="_blank">/api/downloads</a>。</p>
 </div>
 <button class="ghost" onclick="fetch('/api/logout',{method:'POST'}).then(()=>location.href='/')">退出登录</button>
 <script>
+async function setGate(want){
+  const el=document.getElementById('m3'); el.className='msg'; el.textContent='提交中…';
+  const r=await fetch('/api/admin/gate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({public:want,current:document.getElementById('c3').value})});
+  const j=await r.json().catch(()=>({ok:false,error:'HTTP '+r.status}));
+  if(j.ok){ el.className='msg ok'; el.textContent='✓ 已设为'+(j.public?'公开访问':'需要访问密码'); setTimeout(()=>location.reload(),900); }
+  else { el.className='msg err'; el.textContent='✗ '+(j.error||'失败'); }
+}
 async function save(target, cur, next, msg){
   const el=document.getElementById(msg); el.className='msg'; el.textContent='保存中…';
   const r=await fetch('/api/admin/password',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -298,6 +321,18 @@ async function save(target, cur, next, msg){
 
 // ─────────────────────────── 路由 ───────────────────────────
 const auth = ensureAuth();
+
+/**
+ * 是否公开访问。环境变量优先级最高（部署时声明式指定，便于回滚），
+ * 其次是 auth.json 里的 public（后台可切）。
+ * @returns {boolean}
+ */
+function isPublicSite() {
+  const env = String(process.env.TCM_PUBLIC || '').trim();
+  if (env === '1' || env.toLowerCase() === 'true') return true;
+  if (env === '0' || env.toLowerCase() === 'false') return false;
+  return auth.public === true;
+}
 log(`[boot] 站点根=${ROOT} 数据=${DATA} 端口=${PORT}`);
 
 const server = http.createServer(async (req, res) => {
@@ -305,7 +340,9 @@ const server = http.createServer(async (req, res) => {
   const p = u.pathname;
   const sess = sessionOf(req, auth);
   const isAdmin = sess?.role === 'admin';
-  const isAuthed = !!sess;
+  const PUBLIC = isPublicSite();
+  // 公开模式下"进站"这件事不需要密码；但**管理员身份**仍然独立判定（后台照旧要密码）
+  const isAuthed = PUBLIC || !!sess;
 
   // ── 公开资源（登录页也要用图标/样式）
   if (p === '/favicon.ico' || p === '/apple-touch-icon.png' || p.startsWith('/assets/')) return serveAsset(res, p);
@@ -327,7 +364,7 @@ const server = http.createServer(async (req, res) => {
     setCookie(res, '', 0);
     return sendJson(res, 200, { ok: true });
   }
-  if (p === '/api/session') return sendJson(res, 200, { ok: true, authed: isAuthed, admin: isAdmin });
+  if (p === '/api/session') return sendJson(res, 200, { ok: true, authed: isAuthed, admin: isAdmin, public: PUBLIC });
 
   // ── 版本号（**故意不鉴权**）：桌面版的「检查更新」要能问一句"现在最新是几版"。
   //    只回版本号与生成时间 —— 不回文件名、不回下载地址、不回包大小。
@@ -351,7 +388,24 @@ const server = http.createServer(async (req, res) => {
   // ── 后台
   if (p === '/admin' || p === '/admin/') {
     if (!isAdmin) return redirect(res, '/');
-    return sendHtml(res, 200, adminHtml({ siteUpdated: auth.site?.updatedAt, adminUpdated: auth.admin?.updatedAt }));
+    return sendHtml(res, 200, adminHtml({
+      siteUpdated: auth.site?.updatedAt,
+      adminUpdated: auth.admin?.updatedAt,
+      public: isPublicSite(),
+      envFixed: String(process.env.TCM_PUBLIC || '').trim() !== '',
+    }));
+  }
+  if (p === '/api/admin/gate' && req.method === 'POST') {
+    if (!isAdmin) return sendJson(res, 403, { ok: false, error: '需要管理员登录' });
+    const body = await readJson(req);
+    if (!verifyPw(String(body?.current || ''), auth.admin)) return sendJson(res, 401, { ok: false, error: '当前管理员密码不正确' });
+    if (String(process.env.TCM_PUBLIC || '').trim() !== '') {
+      return sendJson(res, 400, { ok: false, error: '已由环境变量 TCM_PUBLIC 固定，后台改不动（避免"改了没生效"的困惑）' });
+    }
+    auth.public = !!body?.public;
+    writeAuth(auth);
+    log(`[admin] 站点访问模式 → ${auth.public ? '公开' : '上锁'}`);
+    return sendJson(res, 200, { ok: true, public: auth.public });
   }
   if (p === '/api/admin/password' && req.method === 'POST') {
     if (!isAdmin) return sendJson(res, 403, { ok: false, error: '需要管理员登录' });

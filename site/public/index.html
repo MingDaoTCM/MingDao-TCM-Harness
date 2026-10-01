@@ -84,7 +84,7 @@
     <a href="#compliance">合规</a>
     <a href="#versions">版本</a>
     <a href="/admin">后台</a>
-    <button class="out" id="logout">退出</button>
+    <button class="out" id="logout" hidden>退出</button>
   </nav>
 </div></header>
 
@@ -112,7 +112,7 @@
   <h2><span class="dot">●</span> 下载桌面版 <span id="verTag" class="pill j" style="font-size:12px"></span></h2>
   <p class="sec-sub">
     内置内核与问诊台的一次性安装包：双击即用、无需终端。安装后首次启动会引导填入模型与 Dify 的密钥
-    （密钥只存在本机 <code>MINGDAO_HOME</code>，不上传）。本页安装包由本站在内网提供，不依赖 GitHub 下载。
+    （密钥只存在本机 <code>MINGDAO_HOME</code>，不上传）。安装包由本站直连提供，不依赖 GitHub 下载；模型密钥<b>不内置在安装包里</b>，装好后在应用内「设置」里自行填写。
   </p>
   <div class="grid g2" id="dlGrid"><div class="empty">正在读取安装包清单…</div></div>
   <p class="sec-sub" style="margin-top:18px;font-size:12.8px">
@@ -177,7 +177,7 @@
 </div></section>
 
 <footer><div class="wrap">
-  <span>© 2026 明道中医 · 本页为内部站点，请勿外传</span>
+  <span>© 2026 明道中医 · 明道中医问诊台（桌面版下载）</span>
   <span class="sp"></span>
   <span id="footVer" style="color:var(--faint)"></span>
 </div></footer>
@@ -230,6 +230,11 @@ function card(g, files) {
     grid.innerHTML = '<div class="empty">读取安装包清单失败：' + (e?.message || e) + '</div>';
   }
 })();
+
+// 「退出」只在确实登录过（管理员）时才显示 —— 公开站点的访客不该看到一个"退出"按钮
+fetch('/api/session', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+  if (j && j.admin) $('#logout').hidden = false;
+}).catch(() => {});
 
 $('#logout').onclick = async () => {
   await fetch('/api/logout', { method: 'POST' }).catch(() => {});

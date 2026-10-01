@@ -8,6 +8,9 @@ After=network.target
 # 由 openresty 容器（host 网络）反代到 127.0.0.1:8448。
 ExecStart=/usr/local/bin/node /opt/mingdao/tcm-site-server.js
 Environment=TCM_PORT=8448 TCM_ROOT=/opt/1panel/www/sites/tcm-site TCM_DATA=/var/lib/mingdao-tcm-site
+# TCM_PUBLIC=1 → 公开站点（首页/安装包清单/下载都免登录）；注释掉即回到"需要访问密码"。
+# 后台 /admin 两种模式下都要管理员密码。
+Environment=TCM_PUBLIC=1
 Restart=always
 RestartSec=3
 
