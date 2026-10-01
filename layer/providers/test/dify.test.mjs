@@ -396,6 +396,50 @@ await testAsync('⑮ ★ 多段 <think>：全部剥掉（只剥第一段会让�
   assert.equal(reasoning.trim(), r.reasoning.trim());
 });
 
+// ★ 用户报的严重问题：v0.1.8 **无法问诊** —— 医师发了完整病历，最终正文只有一个"继续"
+//   （那是编排器的内部口令；Dify 后台查不到问诊记录）。用户同时要求：
+//   **Dify 工作流出问题时自动切换到 DeepSeek 直连**。下面两条钉住这个兜底。
+await testAsync('★ Dify 返回内部口令「继续」→ 自动兜底 DeepSeek 出正文，绝不给空白', async () => {
+  writeCreds({ dify: 'app-t', deepseek: 'sk-t' });
+  clearConfig();
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (u.includes('/chat/completions')) {
+      const isFallback = String(body?.messages?.[0]?.content || '').includes('兜底直连');
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: isFallback ? '兜底产出的问诊正文' : '继续' } }], usage: {} }) };
+    }
+    if (u.includes('/chat-messages')) {
+      // Dify 把编排口令当正文吐了回来（实测现象）
+      return sse([{ event: 'message', answer: '继续' }, { event: 'message_end', metadata: { usage: {} } }]);
+    }
+    throw new Error('未预期请求：' + u);
+  };
+  const p = createProvider({ name: 'dify', baseUrl: 'https://dify.example.com' });
+  const r = await p.chat({ messages: userMessages(), tools: TOOLS });
+  assert.equal(r.fellBack, true, '应标记本次是兜底（便于审计"这次没有知识库"）');
+  assert.match(r.text, /兜底产出的问诊正文/, '必须给医师正文，而不是那个口令');
+  assert.ok(!/^继续$/.test(r.text.trim()), '正文绝不能是「继续」');
+});
+await testAsync('★ Dify 报错（HTTP 5xx）→ 同样自动兜底，不把错误甩给医师', async () => {
+  writeCreds({ dify: 'app-t', deepseek: 'sk-t' });
+  clearConfig();
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (u.includes('/chat/completions')) {
+      const isFallback = String(body?.messages?.[0]?.content || '').includes('兜底直连');
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: isFallback ? '兜底正文' : '继续' } }], usage: {} }) };
+    }
+    if (u.includes('/chat-messages')) return { ok: false, status: 503, text: async () => 'upstream down' };
+    throw new Error('未预期请求：' + u);
+  };
+  const p = createProvider({ name: 'dify', baseUrl: 'https://dify.example.com' });
+  const r = await p.chat({ messages: userMessages(), tools: TOOLS });
+  assert.equal(r.fellBack, true);
+  assert.equal(r.text, '兜底正文');
+});
+
 fs.rmSync(HOME, { recursive: true, force: true });
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

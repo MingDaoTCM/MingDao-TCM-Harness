@@ -265,6 +265,65 @@ export function createProvider(pc) {
   }
 
   /**
+   * 编排模型的**内部口令**：`DECIDE_SYSTEM` 让它"不需要调工具时只回两个字：继续"。
+   * 这个文本本该被丢弃 —— 但一旦它出现在正文里（实测：内核在正文为空时会回填
+   * "请继续完成用户的任务"再问一轮，那一轮的编排口令就可能被当成正文落库），
+   * 医师看到的就是只有一个"继续"的空白问诊。宁可当成失败去兜底，也绝不把它当正文。
+   */
+  const INTERNAL_TOKENS = new Set(['继续', '继续。', 'continue', 'Continue', 'CONTINUE']);
+  const isInternalToken = (t) => INTERNAL_TOKENS.has(String(t || '').trim());
+
+  /**
+   * Dify 不可用时的兜底：**直接用编排模型（DeepSeek）问诊**。
+   *
+   * 为什么值得兜底：知识库与辨证正文在 Dify 工作流里，直连拿不到知识库；
+   * 但"完全没输出"比"没有知识库"糟得多 —— 医师至少要看到正文，而且日志会明确标注这次是兜底。
+   * 为什么用同一份 messages：系统提示（含垂域规则）与全部上下文本来就在里面，
+   * 换模型即可，provider 不需要懂任何字段语义。
+   *
+   * @returns {Promise<{text:string, reasoning:string, usage:any, finish:string, fellBack:true, reason:string}|null>}
+   */
+  async function consultWithoutDify(messages, reason, signal) {
+    const o = orchestrator();
+    if (!o.apiKey) {
+      console.warn(`[dify] ${reason}；且未配置编排模型凭据，无法兜底`);
+      return null;
+    }
+    const sys = '（兜底直连）Dify 工作流本次不可用，请直接依据下面的对话给出中医问诊正文；'
+      + '不得声称已查阅知识库；其余规则（缺项绝不编造、不输出诊疗结论、重大疾病原样保留）照旧。';
+    const msgs = (Array.isArray(messages) ? messages : []).map((m) => ({ role: m.role, content: splitParts(m.content).text }));
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 120000);
+    const onAbort = () => ac.abort();
+    try { if (signal) signal.addEventListener('abort', onAbort, { once: true }); } catch { /* 忽略 */ }
+    try {
+      const res = await fetch(`${o.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${o.apiKey}` },
+        body: JSON.stringify({
+          model: o.model,
+          messages: [{ role: 'system', content: sys }, ...msgs.filter((m) => m.role !== 'system')],
+          temperature: 0.3,
+          ...(o.isDeepseek ? { thinking: { type: 'disabled' } } : {}),
+        }),
+        signal: ac.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 160)}`);
+      const d = await res.json();
+      const text = String(d?.choices?.[0]?.message?.content || '').trim();
+      if (!text) return null;
+      console.warn(`[dify] ${reason} → 已自动切换 DeepSeek 直连产出正文（本次不含知识库）`);
+      return { text, reasoning: '', usage: d?.usage || null, finish: 'stop', fellBack: true, reason };
+    } catch (/** @type {any} */ e) {
+      console.warn(`[dify] ${reason}；兜底直连也失败：${e?.message || e}`);
+      return null;
+    } finally {
+      clearTimeout(timer);
+      try { if (signal) signal.removeEventListener('abort', onAbort); } catch { /* 忽略 */ }
+    }
+  }
+
+  /**
    * 从上下文里的工具结果中取回「本次就诊上下文」。
    *
    * 为什么这么做：Dify 看不到我们的会话，必须在 query 里明确告诉它「本次第几诊 + 上次病历」，
@@ -377,6 +436,9 @@ export function createProvider(pc) {
       });
       if (!dres.ok) {
         const raw = await dres.text().catch(() => '');
+        // Dify 挂了（5xx / 401 / 限流）→ 先兜底出正文，别让医师对着报错框问不了诊
+        const fb = await consultWithoutDify(messages, `Dify HTTP ${dres.status}：${raw.slice(0, 120)}`, opts.signal);
+        if (fb) return fb;
         throw new Error(`[dify] HTTP ${dres.status}: ${raw.slice(0, 200)}`);
       }
 
@@ -452,12 +514,26 @@ export function createProvider(pc) {
       }
       if (ended) { try { reader.cancel().catch(() => {}); } catch {} }
       emitStreams(true); // 补发被 holdBack 扣住的尾巴（与最终 text / reasoning 对齐）
-      if (!answer && streamError) throw new Error(`[dify] 工作流错误：${streamError}`);
-      if (!answer) throw new Error('[dify] 工作流未返回正文（可能被限流或参数异常），请稍后重试');
+      // Dify 报错 / 没返回正文 → **不把错误甩给医师**，先尝试 DeepSeek 兜底；兜底也不行才抛
+      if (!answer) {
+        const why = streamError ? `Dify 工作流错误：${streamError}` : 'Dify 未返回正文（可能被限流或参数异常）';
+        const fb = await consultWithoutDify(messages, why, opts.signal);
+        if (fb) return fb;
+        throw new Error(`[dify] ${why}，且兜底直连未成功`);
+      }
 
       // 思考过程：与上面流式分流的**同一套语义**（thinkingOf），保证「看到的」与「落库的」一致
       let reasoning = thinkingOf(answer).trim();
       let text = visibleOf(answer).trim();
+      // 正文竟是**编排模型的内部口令**（"继续"）→ 视为本次 Dify 失败，走兜底。
+      // 实测：正文位出现"继续"时，医师看到的就是一个空白问诊 —— 这正是用户报的"无法问诊"。
+      // 注意**不要**对"只有思考、没有可见正文"兜底：那种情况下推理通道里是有内容的
+      // （医师看得到），旧的提示文案也更贴切；把它一律当失败会丢掉这段可看内容。
+      if (isInternalToken(text)) {
+        const fb = await consultWithoutDify(messages, `Dify 返回的是内部口令「${text}」而非正文`, opts.signal);
+        if (fb) return fb;
+        text = '（本次回复未产出可见正文：Dify 工作流输出异常，请重试）';
+      }
       if (!text) {
         // 整段都被未闭合的 <think> 吞掉：正文位显式说明，推理照旧留在 reasoning 通道
         text = '（本次回复未产出可见正文：模型输出未正常闭合，请重试）';
