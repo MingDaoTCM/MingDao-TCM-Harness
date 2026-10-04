@@ -185,7 +185,10 @@ jobs:
           # ② 从 Release 下载（GitHub → runner 很快，不占工件配额），**一条流**推到站点
           DL="$(mktemp -d)"
           gh release download "$TAG" -R "$REPO" -D "$DL"
-          rm -f "$DL"/*.yml "$DL"/*.blockmap 2>/dev/null || true
+          # 只丢弃 blockmap（增量更新用，站点不需要）；**latest*.yml 必须留着** ——
+          # 那是 electron-updater 的更新元数据，删了客户端就永远"已是最新"（静默失效）。
+          # 这行原本连着 *.yml 一起删，2026-10-01 实测把自动更新整条链路废掉。
+          rm -f "$DL"/*.blockmap 2>/dev/null || true
           # 页面只按 dmg/exe/deb/AppImage 展示；zip 是自动更新用的，白占慢带宽（仍在 Release 里）
           SITE_FILES=()
           # 站点推：安装包（不含 zip）+ 更新元数据 latest*.yml（自动更新要从站点读）
