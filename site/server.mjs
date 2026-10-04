@@ -293,11 +293,42 @@ a{color:var(--jade)}
   <div class="msg" id="m3"></div>
 </div>
 <div class="card">
+  <h2 style="margin-top:0">社区论坛</h2>
+  <p class="meta">管理公开论坛的帖子（删除即从站点消失）。<a href="/forum/" target="_blank">打开论坛 →</a></p>
+  <div id="fList">读取中…</div>
+  <div class="msg" id="mF"></div>
+</div>
+<div class="card">
   <h2 style="margin-top:0">安装包</h2>
   <p class="meta">安装包由发布流程上传到 <code>downloads/</code>；清单见 <a href="/api/downloads" target="_blank">/api/downloads</a>。</p>
 </div>
 <button class="ghost" onclick="fetch('/api/logout',{method:'POST'}).then(()=>location.href='/')">退出登录</button>
 <script>
+async function loadForum(){
+  const box=document.getElementById('fList');
+  try{
+    const r=await fetch('/api/admin/forum',{cache:'no-store'});
+    const j=await r.json();
+    if(!j.ok){ box.textContent='读取失败：'+(j.error||''); return; }
+    if(!j.posts.length){ box.innerHTML='<p class="meta">还没有帖子。</p>'; return; }
+    box.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:13px">' + j.posts.map(function (p) {
+      var title = String(p.title).replace(/[<>&"]/g, '');
+      var name = String(p.name).replace(/[<>&"]/g, '');
+      return '<tr><td style="padding:6px 4px;border-bottom:1px solid #242b3a">' + title + '</td>'
+        + '<td style="color:#5c6679;white-space:nowrap">' + name + ' · ' + String(p.at).slice(0, 10) + ' · ' + p.replies + ' 回复</td>'
+        + '<td style="text-align:right"><button class="ghost" style="padding:2px 10px;font-size:12px" onclick="delForum(&quot;' + p.id + '&quot;)">删除</button></td></tr>';
+    }).join('') + '</table>';
+  }catch(e){ box.textContent='读取失败：'+(e&&e.message||e); }
+}
+async function delForum(id){
+  if(!confirm('确认删除该帖？')) return;
+  const r=await fetch('/api/admin/forum/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  const j=await r.json().catch(()=>({ok:false,error:'HTTP '+r.status}));
+  const el=document.getElementById('mF'); el.className='msg '+(j.ok?'ok':'err');
+  el.textContent=j.ok?'✓ 已删除':('✗ '+(j.error||'删除失败'));
+  loadForum();
+}
+loadForum();
 async function setGate(want){
   const el=document.getElementById('m3'); el.className='msg'; el.textContent='提交中…';
   const r=await fetch('/api/admin/gate',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -393,6 +424,18 @@ const server = http.createServer(async (req, res) => {
   //    只回版本号与生成时间 —— 不回文件名、不回下载地址、不回包大小。
   //    理由：这个端点是整站唯一的公开面，泄露面必须小到只剩一个版本号，
   //    否则等于把内部下载区（安装包清单）暴露给任何知道域名的人。
+  // ── 版本动态（公开）：由发布流程写入 versions.json（见 workflow 的 publish 作业）。
+  //    页面据此渲染真实发版历史 —— 不再手写"版本动态"那种必然过期的静态文案。
+  if (p === '/api/versions') {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'versions.json'), 'utf8'));
+      return sendJson(res, 200, { ok: true, versions: Array.isArray(j?.versions) ? j.versions : [] });
+    } catch {
+      // 没生成过就退回"只有当前版本"，页面仍可用（不编造历史）
+      const m = downloadManifest();
+      return sendJson(res, 200, { ok: true, versions: m.version ? [{ version: m.version, at: m.generatedAt }] : [] });
+    }
+  }
   if (p === '/api/latest') {
     const m = downloadManifest();
     return sendJson(res, 200, { ok: true, version: m.version || '', generatedAt: m.generatedAt || '' });
@@ -417,6 +460,19 @@ const server = http.createServer(async (req, res) => {
       public: isPublicSite(),
       envFixed: String(process.env.TCM_PUBLIC || '').trim() !== '',
     }));
+  }
+  // 后台的论坛管理：列帖（含每帖回帖数）与删帖 —— 公开论坛必须有可管理的地方，
+  // 否则出现垃圾帖只能去服务器上手改 JSON。
+  if (p === '/api/admin/forum' && req.method === 'GET') {
+    if (!isAdmin) return sendJson(res, 403, { ok: false, error: '需要管理员登录' });
+    const r = listPosts(DATA);
+    return sendJson(res, 200, { ok: true, posts: (r.posts || []).map((x) => ({ id: x.id, title: x.title, name: x.name, at: x.at, replies: x.replies.length })) });
+  }
+  if (p === '/api/admin/forum/delete' && req.method === 'POST') {
+    if (!isAdmin) return sendJson(res, 403, { ok: false, error: '需要管理员登录' });
+    const body = await readJson(req);
+    const r = deletePost(DATA, body?.id);
+    return sendJson(res, r.ok ? 200 : 400, r);
   }
   if (p === '/api/admin/gate' && req.method === 'POST') {
     if (!isAdmin) return sendJson(res, 403, { ok: false, error: '需要管理员登录' });

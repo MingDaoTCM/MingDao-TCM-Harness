@@ -80,6 +80,8 @@
   <b>明道中医 · 问诊台</b>
   <nav>
     <a href="#downloads">下载</a>
+    <a href="/help.html">使用帮助</a>
+    <a href="/forum/">社区论坛</a>
     <a href="#ability">能力</a>
     <a href="#compliance">合规</a>
     <a href="#versions">版本</a>
@@ -116,8 +118,8 @@
   </p>
   <div class="grid g2" id="dlGrid"><div class="empty">正在读取安装包清单…</div></div>
   <p class="sec-sub" style="margin-top:18px;font-size:12.8px">
-    <span class="warn">签名说明</span>：目前 Linux / Windows 安装包为未签名构建；macOS 首次打开若被 Gatekeeper 拦，
-    可右键「打开」或执行 <code>xattr -dr com.apple.quarantine /Applications/明道中医.app</code>。
+    <span class="warn">签名说明</span>：<b>macOS 安装包已签名并完成公证</b>，双击即可打开；
+    Linux / Windows 安装包为未签名构建（Windows 首次运行若出现 SmartScreen 提示，点「更多信息 → 仍要运行」）。
   </p>
 </div></section>
 
@@ -165,14 +167,11 @@
 
 <section id="versions"><div class="wrap">
   <h2><span class="dot">●</span> 版本动态</h2>
-  <p class="sec-sub">桌面版与垂域层一起发版；内核（MingDao-Harness）版本单独跟随上游。</p>
+  <p class="sec-sub">桌面版与垂域层一起发版；内核（MingDao-Harness）版本单独跟随上游。
+    下表由发布流程在发版时写入，<b>不是手写的静态文案</b>。</p>
   <table class="ver">
-    <thead><tr><th>版本</th><th>要点</th></tr></thead>
-    <tbody>
-      <tr><td class="v">v0.1.1</td><td>更换应用图标（玉青脉象，与上游区分）；GitHub Actions 三平台自动出包。</td></tr>
-      <tr><td class="v">v0.1.0</td><td>首个桌面版：内置内核与问诊台，双击即用；患者名册 / 复诊时间线 / 随访提醒 / 复诊上下文修复。</td></tr>
-      <tr><td class="v">垂域层</td><td>Pack API v1：5 个域工具 + 4 条红线；路线 A 接线（Dify 主问诊 + 工具编排）；问诊台独立前端。</td></tr>
-    </tbody>
+    <thead><tr><th>版本</th><th>发布时间</th></tr></thead>
+    <tbody id="verBody"><tr><td colspan="2" class="dim">正在读取版本动态…</td></tr></tbody>
   </table>
 </div></section>
 
@@ -189,8 +188,8 @@ const fmtSize = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.ro
 // 平台分组：决定「哪几个文件归到一张卡」以及卡片标题/图标/说明
 const GROUPS = [
   { key: 'win', ic: '🪟', title: 'Windows 10/11', sub: 'NSIS 安装包 · x64', note: '安装后从开始菜单启动；首次运行若出现 SmartScreen 提示，点「更多信息 → 仍要运行」。', match: (f) => /\.exe$/i.test(f.name) },
-  { key: 'mac-arm', ic: '🍎', title: 'macOS · Apple 芯片', sub: 'dmg · arm64', note: '适用于 M 系列芯片。首次打开若被 Gatekeeper 拦，右键「打开」即可。', match: (f) => /arm64.*\.dmg$/i.test(f.name) },
-  { key: 'mac-x64', ic: '🍎', title: 'macOS · Intel', sub: 'dmg · x64', note: '适用于 Intel 芯片。首次打开若被 Gatekeeper 拦，右键「打开」即可。', match: (f) => /x64.*\.dmg$/i.test(f.name) },
+  { key: 'mac-arm', ic: '🍎', title: 'macOS · Apple 芯片', sub: 'dmg · arm64', note: '适用于 M 系列芯片。<b>已签名并公证</b>，双击即可打开。', match: (f) => /arm64.*\.dmg$/i.test(f.name) },
+  { key: 'mac-x64', ic: '🍎', title: 'macOS · Intel', sub: 'dmg · x64', note: '适用于 Intel 芯片。<b>已签名并公证</b>，双击即可打开。', match: (f) => /x64.*\.dmg$/i.test(f.name) },
   { key: 'linux', ic: '🐧', title: 'Linux', sub: 'deb / AppImage · x64', note: 'deb 用 <code>sudo dpkg -i</code> 安装；AppImage 需 <code>chmod +x</code> 后双击。', match: (f) => /\.(deb|AppImage)$/i.test(f.name) },
 ];
 
@@ -207,6 +206,23 @@ function card(g, files) {
       <div><b>${g.title}</b><span>${g.sub}</span></div></div>
       ${btns}<p class="note">${g.note}</p>${shas}</div>`;
 }
+
+// 版本动态：服务端在发版时写入 versions.json（/api/versions）——页面只负责渲染
+(async () => {
+  const body = $('#verBody');
+  if (!body) return;
+  try {
+    const r = await fetch('/api/versions', { cache: 'no-store' });
+    const j = await r.json();
+    const vs = (j && j.versions) || [];
+    body.innerHTML = vs.length
+      ? vs.map((v) => '<tr><td class="v">v' + String(v.version || '').replace(/^v/, '')
+          + '</td><td>' + String(v.at || '').slice(0, 10) + '</td></tr>').join('')
+      : '<tr><td colspan="2" class="dim">暂无发版记录</td></tr>';
+  } catch (e) {
+    body.innerHTML = '<tr><td colspan="2" class="dim">读取版本动态失败</td></tr>';
+  }
+})();
 
 (async () => {
   const grid = $('#dlGrid');

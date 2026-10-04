@@ -214,4 +214,9 @@ jobs:
           ssh $SSHOPT "$TARGET" "umask 077 && cat > /opt/mingdao/.tcm-token" <<<"$GH_TOKEN"
           ssh $SSHOPT "$TARGET" "python3 /opt/mingdao/tcm-fetch-assets.py --repo '$REPO' --tag '$TAG' --dir /opt/1panel/www/sites/tcm-site/downloads --manifest-only --token-file /opt/mingdao/.tcm-token"
           ssh $SSHOPT "$TARGET" "rm -f /opt/mingdao/.tcm-token" || true
+          # 版本动态：把真实发版历史写到站点（页面据此渲染，不再手写必然过期的静态文案）
+          gh release list -R "$REPO" --limit 20 --json tagName,publishedAt,name \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);json.dump({'versions':[{'version':x['tagName'].lstrip('v'),'at':x['publishedAt'],'name':x.get('name') or ''} for x in d]},sys.stdout,ensure_ascii=False,indent=2)" > "$DL/versions.json"
+          scp -q $SSHOPT "$DL/versions.json" "$TARGET:/opt/1panel/www/sites/tcm-site/versions.json"
+          echo "  已更新版本动态（$(python3 -c "import json;print(len(json.load(open('$DL/versions.json'))['versions']))") 条）"
           echo "站点版本端点："; curl -s -m 20 "https://tcm.mingdao.ai/api/latest" | sed 's/^/  /'
