@@ -272,13 +272,21 @@ await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物
   const appDir = path.join(pkg, 'app');
   fs.mkdirSync(appDir, { recursive: true });
   for (const raw of pats) {
-    if (raw.startsWith('!')) continue;          // 否定模式不参与"要带哪些"
+    if (raw.startsWith('!')) continue;          // 否定模式不参与"要带哪些"（下一段单独应用）
     const rel = raw.replace(/\/\*\*$/, '');
     const src = path.join(REPO, rel);
     if (!fs.existsSync(src)) continue;
     const dst = path.join(appDir, rel);
     if (fs.statSync(src).isDirectory()) fs.cpSync(src, dst, { recursive: true });
     else { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(src, dst); }
+  }
+  // ⚠ 否定模式必须**真的应用**。只 continue 跳过，等于「排除」这件事根本没被测：
+  //   实测把 `!tools/tcm-ui/desktop/**`（整目录排除）改回去，测试照样全绿（假绿）。
+  //   那正是「断言看着在守、其实什么都没守」，比不写断言更危险。
+  for (const raw of pats.filter((x) => x.startsWith('!'))) {
+    const rel = raw.slice(1).replace(/\/\*\*$/, '');
+    const abs = path.join(appDir, rel);
+    if (fs.existsSync(abs)) fs.rmSync(abs, { recursive: true, force: true });
   }
   const pkgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-pkg-home-'));
   try {
@@ -292,8 +300,17 @@ await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物
     //   先漏 layer/providers/**，后漏 tools/tcm-ui/settings.mjs —— 后者是 CI 冒烟
     //   报 Cannot find module 才发现的）。这条断言把整类问题一次挡住。
     const srv = fs.readFileSync(path.join(appDir, 'tools', 'tcm-ui', 'server.mjs'), 'utf8');
-    const rels = [...srv.matchAll(/from\s+'(\.[^']+)'/g)].map((m) => m[1]);
-    assert.ok(rels.length > 0, '应能从 server.mjs 解析出本地 import');
+    // ⚠ 必须同时扫**动态** import：`await import('./desktop/orchestrator.mjs')` 在
+    //   「检查更新」被点击前根本不会执行 —— 静态路径检查与普通断言都覆盖不到。
+    //   v0.1.15 就是这样漏出去的（打包 filter 整目录排除 desktop/**，装完点检查更新才报错）。
+      const rels = [
+        ...[...srv.matchAll(/from\s+'(\.[^']+)'/g)].map((m) => m[1]),
+        // 动态 import 也要扫：`await import('./desktop/orchestrator.mjs')` 在点「检查更新」
+        // 之前根本不执行，只扫静态 from 会漏掉整类问题（v0.1.15 实测）。
+        ...[...srv.matchAll(/import\(\s*'(\.[^']+)'\s*\)/g)].map((m) => m[1]),
+      ];
+    assert.ok(rels.length > 0, '应能从 server.mjs 解析出本地 import（含动态）');
+      assert.ok(rels.some((r) => r.includes('desktop/orchestrator')), '动态 import 必须被扫到');
     const missing = rels
       .map((r) => path.resolve(path.join(appDir, 'tools', 'tcm-ui'), r))
       .filter((abs) => !fs.existsSync(abs))

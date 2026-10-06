@@ -44,7 +44,15 @@ extraResources:
       - layer/providers/**
       - tools/tcm-ui/**
       - '!tools/tcm-ui/test/**'
-      - '!tools/tcm-ui/desktop/**'
+      # desktop/ 里**只有 Electron 主进程那几样**要排除。整目录排除是错的：
+      # `desktop/orchestrator.mjs` 是**纯 Node**（有单测、不 import electron），
+      # 而 UI 服务端 server.mjs 的「检查更新」正需要它的 checkForUpdate ——
+      # 排除后该端点在打包产物里一跑就 ERR_MODULE_NOT_FOUND
+      # （v0.1.15 实测："暂时查不到最新版本：Cannot find module .../tools/tcm-ui/desktop/orchestrator.mjs"）。
+      - '!tools/tcm-ui/desktop/main.js'
+      - '!tools/tcm-ui/desktop/node_modules/**'
+      - '!tools/tcm-ui/desktop/build/**'
+      - '!tools/tcm-ui/desktop/electron-builder.yml'
   # 内核：默认取工作区同级的 MingDao-Harness
   - from: ../../../../MingDao-Harness/src
     to: kernel/src
