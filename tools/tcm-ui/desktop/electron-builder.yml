@@ -50,6 +50,10 @@ extraResources:
       # 排除后该端点在打包产物里一跑就 ERR_MODULE_NOT_FOUND
       # （v0.1.15 实测："暂时查不到最新版本：Cannot find module .../tools/tcm-ui/desktop/orchestrator.mjs"）。
       - '!tools/tcm-ui/desktop/main.js'
+      # ⚠ 必须排除**打包输出目录**：`dist/` 就在 desktop/ 下，不排除就会被 extraResources
+      #   递归复制进自己的产物里（dist → resources/app/tools/.../desktop/dist → …），
+      #   路径无限增长直到 ENAMETOOLONG 打包失败（v0.1.16 四条腿全红，实测）。
+      - '!tools/tcm-ui/desktop/dist/**'
       - '!tools/tcm-ui/desktop/node_modules/**'
       - '!tools/tcm-ui/desktop/build/**'
       - '!tools/tcm-ui/desktop/electron-builder.yml'

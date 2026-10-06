@@ -268,6 +268,12 @@ await testAsync('★ 打包布局：按 electron-builder 的 filter 组装产物
   assert.ok(pats.some((p) => p.startsWith('layer/providers/')), 'filter 必须带上 layer/providers/**');
   assert.ok(pats.some((p) => p.startsWith('layer/packs/')), 'filter 必须带上 layer/packs/tcm/**');
 
+    // ★ 必须排除**打包输出目录**与依赖目录：`dist/` 在 desktop/ 下，不排除会被 extraResources
+    //   递归复制进自己的产物（dist → resources/app/.../desktop/dist → …），ENAMETOOLONG 打包失败。
+    //   （v0.1.16 四条构建腿全红就是这个；本机全新检出没有 dist/，所以只有 CI 才炸得出。）
+    assert.ok(pats.includes('!tools/tcm-ui/desktop/dist/**'), 'filter 必须排除 desktop/dist/**（否则打包自我递归）');
+    assert.ok(pats.some((x) => x.includes('desktop/node_modules')), 'filter 必须排除 desktop/node_modules/**');
+
   const pkg = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-pkg-'));
   const appDir = path.join(pkg, 'app');
   fs.mkdirSync(appDir, { recursive: true });
