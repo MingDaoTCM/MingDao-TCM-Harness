@@ -388,7 +388,14 @@ export function initConsult() {
       tip.textContent = '对准舌象后点「拍摄」。';
     } catch (e) {
       camStop();
-      tip.textContent = '打不开摄像头（' + (e?.name || e?.message || e) + '）—— 可改用「选择图片」';
+      // 把失败原因讲清楚：这几种的处理方式完全不同，含糊报错等于让人干瞪眼
+      const why = e?.name === 'NotAllowedError' ? '摄像头权限被拒绝（系统或应用未放行）'
+        : e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError' ? '没有检测到摄像头设备'
+        : e?.name === 'NotReadableError' ? '摄像头被其他程序占用（如会议软件）'
+        : e?.name === 'SecurityError' ? '当前页面不是安全上下文'
+        : (e?.name || e?.message || String(e));
+      tip.textContent = '打不开摄像头：' + why + ' —— 可改用「选择图片」';
+      console.warn('[camera] getUserMedia 失败：' + (e?.name || '') + ' ' + (e?.message || ''));
       $('#tongue').click();
     }
   };

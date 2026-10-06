@@ -94,5 +94,15 @@ test('问诊表单：OPT_FIELDS 的每个键都在 index.html 有对应控件（
   for (const k of ['zhushu', 'xianbingshi']) assert.ok(htmlKeys.has(k), `必填字段 ${k} 缺少控件`);
 });
 
+
+test('★ 摄像头权限：request 与 check 两个处理器都必须设（Electron>=20 只设 request 会拿 NotAllowedError）', () => {
+  const main = fs.readFileSync(path.join(HERE, '..', 'desktop', 'main.js'), 'utf8');
+  assert.ok(/setPermissionRequestHandler/.test(main), '必须设 setPermissionRequestHandler');
+  assert.ok(/setPermissionCheckHandler/.test(main), '必须设 setPermissionCheckHandler');
+  // 只放行 media，其余必须拒（问诊台用不到地理位置/通知/剪贴板）
+  assert.ok(/permission === 'media'/.test(main), '应放行 media');
+  assert.ok(/!ok|cb\(ok\)/.test(main), '拒绝时要走 cb(false)');
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

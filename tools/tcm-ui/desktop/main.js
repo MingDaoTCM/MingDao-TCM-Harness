@@ -330,7 +330,17 @@ if (!app.requestSingleInstanceLock()) {
     // 摄像头：桌面版要能「拍舌象」。Electron 的默认策略不保证放行 media，
     // 这里显式只放行 media，其余（地理位置/通知/剪贴板…）一律拒 —— 问诊台用不到。
     try {
-      session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
+      // media 与 mediaKeySystem 是两条独立的权限名；其余（地理位置/通知/剪贴板…）一律拒
+      const allowMedia = (permission) => permission === 'media' || permission === 'mediaKeySystem';
+      session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
+        const ok = allowMedia(permission);
+        if (!ok) console.log('[perm] 拒绝权限：' + permission);
+        cb(ok);
+      });
+      // ⚠ Electron >= 20：getUserMedia 之前还会过一次**权限检查**（不是请求）。
+      //   只设 request 处理器时，检查这一步会否掉 → 页面拿到 NotAllowedError
+      //   （用户实测：桌面版调用摄像头失败）。两个处理器缺一不可。
+      session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowMedia(permission));
     } catch (/** @type {any} */ e) { console.warn('[perm] 权限处理器设置失败：' + (e?.message || e)); }
     // 自动更新：装完就不用再手动下载（后台检查，失败不打扰）
     initAutoUpdate().catch(() => {});
