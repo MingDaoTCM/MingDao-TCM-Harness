@@ -11,9 +11,11 @@
 // 出安装包：    npm run dist:linux   （Windows/macOS 见 package.json；需设 MINGDAO_KERNEL 之外的镜像已内置）
 import { app, BrowserWindow, shell, dialog, Menu, Tray, nativeImage, session } from 'electron';
 import fs from 'node:fs';
+import https from 'node:https';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APP_NAME, resolveAppRoot, resolveKernelRoot, startApp, checkForUpdate } from './orchestrator.mjs';
+import { APP_NAME, resolveAppRoot, resolveKernelRoot, startApp, checkForUpdate, pickArtifact } from './orchestrator.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -99,6 +101,56 @@ async function initAutoUpdate() {
     console.warn('[update] 启动检查失败（不影响使用）：' + (e?.message || e));
   }
   return updater;
+}
+
+/**
+ * 从站点下载安装包到「下载」目录，并在完成后直接打开安装程序。
+ *
+ * 为什么要有它：electron-updater 并非在所有场景都生效（Linux 的 deb、未以 AppImage 启动、
+ * 某些签名组合）。**回退路径不能再只是"给你个链接"** —— 那等于让医师自己去网页里找
+ * （用户实测反馈："发现新版本还要手动去站点页面下载"）。
+ *
+ * @param {string} url @param {string} name @param {(pct:number)=>void} [onProgress]
+ * @returns {Promise<string>} 落盘路径
+ */
+function downloadInstaller(url, name, onProgress) {
+  return new Promise((resolve, reject) => {
+    const dir = path.join(app.getPath('downloads'), APP_NAME.replace(/[^\w一-龥-]/g, ''));
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, name);
+    const file = fs.createWriteStream(dest);
+    const get = (u, depth = 0) => {
+      if (depth > 5) { reject(new Error('重定向过多')); return; }
+      const mod = u.startsWith('https:') ? https : http;
+      const req = mod.get(u, { headers: { 'User-Agent': 'MingDaoTCM-Desktop' } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          get(new URL(res.headers.location, u).toString(), depth + 1);
+          return;
+        }
+        if (res.statusCode !== 200) { reject(new Error('HTTP ' + res.statusCode)); return; }
+        const total = Number(res.headers['content-length'] || 0);
+        let got = 0;
+        res.on('data', (c) => {
+          got += c.length;
+          if (total && onProgress) onProgress(Math.floor((got / total) * 100));
+        });
+        res.pipe(file);
+        file.on('finish', () => file.close(() => resolve(dest)));
+      });
+      req.on('error', reject);
+      req.setTimeout(30000, () => req.destroy(new Error('下载超时')));
+    };
+    get(url);
+  });
+}
+
+/** 按平台给一句"下一步怎么做"——安装方式各平台不同，含糊其辞等于没帮上忙 */
+function installHint(dest) {
+  if (process.platform === 'darwin') return `已下载到：\n${dest}\n\n将打开 dmg，把「明道中医」拖进「应用程序」覆盖旧版即可。`;
+  if (process.platform === 'win32') return `已下载到：\n${dest}\n\n将启动安装程序，按提示完成后重启应用。`;
+  return `已下载到：\n${dest}\n\n${
+    dest.endsWith('.deb') ? '安装：sudo dpkg -i ' + dest : '赋予执行权限后运行：chmod +x ' + dest}`;
 }
 
 /**

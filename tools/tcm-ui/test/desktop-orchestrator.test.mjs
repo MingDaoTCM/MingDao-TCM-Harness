@@ -13,7 +13,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { resolveAppRoot, resolveKernelRoot, startApp, versionGt, checkForUpdate, installLayer } from '../desktop/orchestrator.mjs';
+import {
+  checkForUpdate,
+  installLayer,
+  pickArtifact,
+  resolveAppRoot,
+  resolveKernelRoot,
+  startApp,
+  versionGt,
+} from '../desktop/orchestrator.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.resolve(HERE, '..');
@@ -318,5 +326,28 @@ await testAsync('★ 打包后的内核必须报得出真实版本（否则 Pack
 });
 
 fs.rmSync(HOME, { recursive: true, force: true });
+
+// ★ 用户报的：发现新版本还要手动去站点下载。回退路径要自己会挑包 ——
+//   挑错包比不挑更糟（让人装上一个跑不起来的架构）。
+const FILES = [
+  { name: 'mingdao-tcm-0.1.13-amd64.deb' },
+  { name: 'mingdao-tcm-0.1.13-arm64.dmg' },
+  { name: 'mingdao-tcm-0.1.13-x64.dmg' },
+  { name: 'mingdao-tcm-0.1.13-x86_64.AppImage' },
+  { name: 'mingdao-tcm-setup-0.1.13-x64.exe' },
+];
+await testAsync('★ pickArtifact：各平台/架构都挑到对的那个包', async () => {
+  assert.equal(pickArtifact(FILES, 'darwin', 'arm64'), 'mingdao-tcm-0.1.13-arm64.dmg');
+  assert.equal(pickArtifact(FILES, 'darwin', 'x64'), 'mingdao-tcm-0.1.13-x64.dmg');
+  assert.equal(pickArtifact(FILES, 'win32', 'x64'), 'mingdao-tcm-setup-0.1.13-x64.exe');
+  // Linux：默认给 deb（多数人是 dpkg 装的）；以 AppImage 方式运行时才优先 AppImage
+  assert.equal(pickArtifact(FILES, 'linux', 'x64'), 'mingdao-tcm-0.1.13-amd64.deb');
+  assert.equal(pickArtifact(FILES, 'linux', 'x64', { appImage: true }), 'mingdao-tcm-0.1.13-x86_64.AppImage');
+  // 挑不出来必须返回空串（调用方据此老实说明），**不许瞎猜一个**
+  assert.equal(pickArtifact([{ name: 'readme.txt' }], 'darwin', 'arm64'), '');
+  assert.equal(pickArtifact([], 'win32', 'x64'), '');
+  assert.equal(pickArtifact(FILES, 'freebsd', 'x64'), '');
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

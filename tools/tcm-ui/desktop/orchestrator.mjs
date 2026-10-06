@@ -152,6 +152,33 @@ export function readAppVersion(appRoot) {
   } catch { return ''; }
 }
 
+/**
+ * 按平台/架构从站点清单里挑出**该下的那个安装包**。
+ *
+ * 为什么需要它：electron-updater 在部分场景不生效（Linux 的 deb、未以 AppImage 启动、
+ * 或某些签名/公证组合），此时**不能只给个链接让医师自己去网页找**（用户实测就是这么反馈的）。
+ * 回退路径必须自己会挑包、自己会下。
+ *
+ * @param {{name?:string}[]} files 站点清单（/api/downloads 的 files）
+ * @param {string} platform process.platform
+ * @param {string} arch process.arch
+ * @param {{appImage?:boolean}} [hint] 以 AppImage 方式运行时优先 AppImage，否则优先 deb
+ * @returns {string} 文件名；挑不出返回空串（调用方据此说明，不要瞎猜一个）
+ */
+export function pickArtifact(files, platform, arch, hint = {}) {
+  const list = (files || []).map((f) => String(f?.name || '')).filter(Boolean);
+  const find = (re) => list.find((n) => re.test(n)) || '';
+  if (platform === 'darwin') return arch === 'arm64' ? find(/arm64\.dmg$/i) : find(/x64\.dmg$/i);
+  if (platform === 'win32') return find(/setup-.*x64\.exe$/i) || find(/\.exe$/i);
+  if (platform === 'linux') {
+    const app = find(/x86_64\.AppImage$/i) || find(/\.AppImage$/i);
+    const deb = find(/amd64\.deb$/i) || find(/\.deb$/i);
+    if (arch === 'arm64') return find(/arm64\.(AppImage|deb)$/i);
+    return hint.appImage ? (app || deb) : (deb || app);
+  }
+  return '';
+}
+
 /** 版本比较：只认前 3 段数字，预发布后缀忽略（内部发布不玩 rc） */export function versionGt(a, b) {
   const seg = (v) => String(v || '').replace(/^v/, '').split(/[.\-+]/).map((n) => parseInt(n, 10) || 0);
   const pa = seg(a);
