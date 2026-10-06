@@ -349,5 +349,24 @@ await testAsync('★ pickArtifact：各平台/架构都挑到对的那个包', a
   assert.equal(pickArtifact(FILES, 'freebsd', 'x64'), '');
 });
 
+
+await testAsync('★ 更新端点的模块路径必须能解析（写错 ../desktop 只在运行时炸，测试抓不到）', async () => {
+  const srv = fs.readFileSync(path.join(UI_DIR, 'server.mjs'), 'utf8');
+  // 从 tools/tcm-ui/server.mjs 出发，desktop/ 是**兄弟目录** → 必须 ./desktop/...
+  assert.ok(!/['"]\.\.\/desktop\/orchestrator\.mjs['"]/.test(srv),
+    '不得用 ../desktop/orchestrator.mjs（那是 tools/desktop，不存在）');
+  assert.match(srv, /['"]\.\/desktop\/orchestrator\.mjs['"]/, '应当用 ./desktop/orchestrator.mjs');
+  // 而且要**真的能 import**（解析不到会抛 ERR_MODULE_NOT_FOUND）
+  await import(path.join(UI_DIR, 'desktop', 'orchestrator.mjs'));
+});
+
+await testAsync('★ 前端不得把 SITE_URL（函数）当字符串插进文案，也不该再出现"内部站点"', async () => {
+  const js = fs.readFileSync(path.join(UI_DIR, 'public', 'js', 'settings.js'), 'utf8');
+  assert.ok(!/\$\{SITE_URL\}/.test(js), 'SITE_URL 是函数，必须写成 ${SITE_URL()}（否则界面会显示函数源码）');
+  assert.ok(!/（内部）|\(内部\)/.test(js), '站点已公开，文案里不该再出现"内部"');
+  const srv = fs.readFileSync(path.join(UI_DIR, 'server.mjs'), 'utf8');
+  assert.ok(!/内部站点/.test(srv), '站点已公开，注释与文案都该同步');
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

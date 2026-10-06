@@ -28,7 +28,7 @@ import { readSettings, writeSettings } from './settings.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(HERE, 'public');
-/** 内部站点（下载页/检查更新/反馈都指向它）。可用环境变量覆盖，便于指向测试环境。 */
+/** 站点地址（下载页/使用帮助/论坛/检查更新都指向它）。**现在是公开站点**。可用环境变量覆盖，便于指向测试环境。 */
 const SITE_URL = (process.env.MINGDAO_TCM_SITE || 'https://tcm.mingdao.ai').replace(/\/+$/, '');
 
 /** 读请求体（设置页要 POST 密钥；限 64KB 足够） */
@@ -126,7 +126,7 @@ function handleTcm(/** @type {any} */ req, /** @type {any} */ res, /** @type {st
       (async () => {
         const base = { siteUrl: SITE_URL, nextUrl: `${SITE_URL}/` };
         try {
-          const { checkForUpdate } = await import('../desktop/orchestrator.mjs');
+          const { checkForUpdate } = await import('./desktop/orchestrator.mjs');
           json(res, 200, { ok: true, ...(await checkForUpdate({ siteUrl: SITE_URL, current: cur })), ...base });
         } catch (e) {
           json(res, 200, { ok: false, status: 'unknown', current: cur, latest: '', reason: String(e?.message || e), ...base });
