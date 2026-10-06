@@ -297,7 +297,9 @@ export async function startApp(opts = {}) {
     host,
     quiet: opts.quiet !== false,
     // 界面上的「检查更新」要能说"当前 vX.Y.Z" —— 版本从桌面版自己的 package.json 读
-    currentVersion: readAppVersion(appRoot),
+    // 版本号优先用调用方给的（Electron 的 app.getVersion()）——打包产物**不含**
+    // desktop/package.json（extraResources 排除了 desktop/**），靠读文件必空 → "版本未知"。
+    currentVersion: String(opts.appVersion || '') || readAppVersion(appRoot),
   });
 
   return {

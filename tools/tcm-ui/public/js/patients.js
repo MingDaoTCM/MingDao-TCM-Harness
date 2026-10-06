@@ -87,6 +87,17 @@ export async function refreshRoster() {
 }
 
 function visitCard(v) {
+  // 四态疗效对比：由 visit_compare 在**该次就诊时**判定并固化进快照。
+  // 没做过对比就明确写"尚未生成"，而不是留白（留白会被当成"没有变化"）。
+  const cmpRows = (v.compare || []);
+  const cmp = '<div class="cmp"><div class="ct">疗效对比（四态 · 该次就诊时固化）</div>'
+    + (cmpRows.length
+      ? '<table class="vfields"><thead><tr><th>症状</th><th>上次</th><th>本次</th><th>变化</th></tr></thead><tbody>'
+        + cmpRows.map((it) => '<tr><td>' + esc(it.label) + '</td><td>' + esc(it.last) + '</td><td>'
+            + esc(it.now) + '</td><td class="st st-' + esc(String(it.state || '')) + '">' + esc(it.state) + '</td></tr>').join('')
+        + '</tbody></table>'
+      : '<div class="cnone">尚未生成（该次就诊未做复诊对比）</div>')
+    + '</div>';
   const rows = v.items.map((it) =>
     '<tr><th>' + esc(it.label) + '</th><td' + (it.value ? '' : ' class="empty"') + '>'
     + (it.value ? esc(it.value) : '—') + '</td></tr>').join('');
@@ -99,7 +110,7 @@ function visitCard(v) {
     + '<span class="vn">' + esc(v.label) + '</span><span class="vd">' + esc(v.at || '') + '</span>'
     + '<span class="sp"></span>'
     + (v.changes.length ? '<span class="vc">' + v.changes.length + ' 项变化</span>' : '')
-    + '</div>' + changes + '<table class="vfields">' + rows + '</table></div>';
+    + '</div>' + changes + '<table class="vfields">' + rows + '</table>' + cmp + '</div>';
 }
 
 function renderDetail(d) {

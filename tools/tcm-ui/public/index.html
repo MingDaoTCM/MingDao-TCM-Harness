@@ -66,8 +66,19 @@
       <h3>四诊 · 舌象 / 脉象<span class="opt">可选</span></h3>
       <div class="field"><label>舌象（望诊）</label><input id="f_shexiang" type="text" placeholder="舌红苔黄" /></div>
       <div class="field">
-        <label>舌象照片（拍照或选图，随问诊一起交给 Dify）</label>
-        <input id="tongue" type="file" accept="image/*" capture="environment" />
+        <label>舌象照片（随问诊一起交给 Dify；Dify 侧需开启视觉）</label>
+        <div class="row" style="margin:0 0 6px">
+          <button class="ghost" id="tongueShot" style="flex:1">📷 摄像头拍照</button>
+          <button class="ghost" id="tonguePick" style="flex:1">📁 选择图片</button>
+        </div>
+        <input id="tongue" type="file" accept="image/*" hidden />
+        <div id="camBox" class="cambox" hidden>
+          <video id="camVideo" playsinline autoplay muted></video>
+          <div class="row" style="margin-top:8px">
+            <button class="primary" id="camShoot" style="flex:1">拍摄</button>
+            <button class="ghost" id="camCancel">取消</button>
+          </div>
+        </div>
         <img id="thumb" alt="舌象预览" />
         <div id="tongueTip" style="font-size:11.5px;color:var(--faint);margin-top:4px"></div>
       </div>

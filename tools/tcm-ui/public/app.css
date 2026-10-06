@@ -205,3 +205,27 @@ button.sm{padding:3px 9px;font-size:12px}
    于是 hidden 形同虚设，没有提醒时顶部仍挂着一条空黄条（截图实拍发现，早期版本就在）。
    显式补一条，别再指望 [hidden] 单独生效。 */
 .remindbar[hidden]{display:none !important}
+
+  /* 全局提示：底部「检查更新」在任何视图都能点，结果必须**跨视图可见** ——
+     原先写进只在设置页存在的 #setMsg，从别的页面点等于"没反应"（用户实测报的）。 */
+  .toast{position:fixed;left:50%;bottom:56px;transform:translateX(-50%);z-index:50;
+         max-width:min(620px,88vw);padding:10px 16px;border-radius:10px;
+         background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+         font-size:13.5px;box-shadow:0 8px 28px rgba(0,0,0,.45)}
+  .toast.ok{border-color:rgba(63,185,80,.5)}
+  .toast.warn{border-color:rgba(210,153,34,.55)}
+  .toast.err{border-color:rgba(248,81,73,.55)}
+  .toast.dim{color:var(--dim)}
+  .toast[hidden]{display:none !important}
+
+  /* 舌象取景框：内嵌在表单里（不弹独立窗口），拍完立即回到表单，少一次窗口切换 */
+  .cambox{background:#000;border:1px solid var(--line);border-radius:10px;padding:8px;margin:6px 0}
+  .cambox video{width:100%;max-height:260px;border-radius:6px;background:#000;display:block}
+
+  /* 每次就诊的疗效对比（四态）：与"事实差异"分开放 —— 前者是模型判定，后者是逐字对照 */
+  .cmp{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+  .cmp .ct{font-size:11.5px;color:var(--faint);margin-bottom:4px}
+  .cmp .cnone{font-size:12px;color:var(--faint)}
+  .cmp .st{font-weight:600}
+  .cmp .st-消失{color:var(--accent)} .cmp .st-减轻{color:var(--accent2)}
+  .cmp .st-无变化{color:var(--dim)} .cmp .st-加重{color:var(--err)}

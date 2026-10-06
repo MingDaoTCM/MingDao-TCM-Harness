@@ -182,6 +182,76 @@ export function visitLabel(n) {
 // 与 FIELD_CN 收敛到一处是同一个道理（见该常量上方的说明）。
 
 /** 患者注册表路径 */
+/**
+ * 原子写：先写同目录临时文件再 rename，避免崩溃时留下半截 JSON。
+ * 患者数据**不可半写** —— 半份注册表比没有更危险（会被当成"这个人不存在"而重新发号）。
+ */
+export function writeJsonAtomicAt(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * 改患者基本信息（姓名/出生年/性别）。**只动这几项**，病历与就诊记录一律不碰 ——
+ * 改名字不该影响任何一次就诊内容。
+ * @returns {{ok:true, patient:any} | {ok:false, error:string}}
+ */
+export function updatePatient(home, id, patch = {}) {
+  const pid = String(id || '').trim().toUpperCase();
+  if (!/^P\d{3,}$/.test(pid)) return { ok: false, error: '非法的病历号' };
+  let reg;
+  try { reg = loadRegistryFrom(home); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  const p = reg.patients?.[pid];
+  if (!p) return { ok: false, error: `病历号 ${pid} 不存在` };
+
+  const next = { ...p };
+  if (patch.name !== undefined) {
+    const name = String(patch.name).trim().replace(/\s+/g, '');
+    if (!name) return { ok: false, error: '姓名不能为空' };
+    next.name = name;
+  }
+  if (patch.birth !== undefined) next.birth = String(patch.birth).replace(/[^0-9]/g, '').slice(0, 4);
+  if (patch.sex !== undefined) {
+    const sex = String(patch.sex).trim();
+    if (sex && !['男', '女'].includes(sex)) return { ok: false, error: '性别只能是男/女（或留空）' };
+    next.sex = sex;
+  }
+  next.updatedAt = new Date().toISOString();
+  reg.patients[pid] = next;
+  try { writeJsonAtomicAt(registryFile(home), reg); } catch (e) { return { ok: false, error: `写入失败：${e?.message || e}` }; }
+  return { ok: true, patient: { id: pid, ...next } };
+}
+
+/**
+ * 删除患者。**同时删掉其病历快照目录** —— 只从注册表摘掉会留下无主病历，
+ * 下次同名患者登记时可能被误当作历史（混病历是不可逆的错误）。
+ * 要求显式 `confirm: true`：调用方必须先让医师确认。
+ * @returns {{ok:true, removed:number} | {ok:false, error:string}}
+ */
+export function deletePatient(home, id, { confirm = false } = {}) {
+  const pid = String(id || '').trim().toUpperCase();
+  if (!/^P\d{3,}$/.test(pid)) return { ok: false, error: '非法的病历号' };
+  if (!confirm) return { ok: false, error: '删除患者需要显式确认（confirm:true）' };
+  let reg;
+  try { reg = loadRegistryFrom(home); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  if (!reg.patients?.[pid]) return { ok: false, error: `病历号 ${pid} 不存在` };
+
+  const dir = path.join(intakeRootDir(home), pid);
+  let removed = 0;
+  try {
+    if (fs.existsSync(dir)) {
+      removed = fs.readdirSync(dir).length;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch (e) { return { ok: false, error: `病历目录删除失败：${e?.message || e}` }; }
+
+  delete reg.patients[pid];
+  try { writeJsonAtomicAt(registryFile(home), reg); } catch (e) { return { ok: false, error: `注册表写入失败：${e?.message || e}` }; }
+  return { ok: true, removed };
+}
+
 export function registryFile(home) {
   return path.join(String(home || ''), 'patients.json');
 }
@@ -264,12 +334,9 @@ export function createPack(ctx) {
   const registryPath = () => registryFile(home);
   const intakeRoot = () => intakeRootDir(home);
 
-  /** 原子写：先写同目录临时文件再 rename，避免崩溃时留下半截 JSON（患者数据不可半写） */
+  /** 原子写：委托模块级实现（**一处实现**：工具与"患者编辑/删除"共用同一套写盘纪律） */
   function writeJsonAtomic(file, obj) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    writeJsonAtomicAt(file, obj);
   }
 
   /** 读患者注册表（语义见模块级 loadRegistryFrom：损坏一律大声失败） */
@@ -580,6 +647,14 @@ export function createPack(ctx) {
     if (!cmp?.items?.length) {
       return { ok: true, output: '（四态对比生成失败，请稍后重试）', data: { items: [] } };
     }
+    // 固化进**本次**就诊快照：同一次就诊的四态对比是既定事实，历史里应当直接看得到，
+    // 而不是每次翻病历都要再问一遍模型（既慢又可能给出不一致的结果）。
+    try {
+      const cur = readSnapshot(files[0]) || {};
+      cur.compare = { at: new Date().toISOString(), items: cmp.items };
+      writeJsonAtomic(files[0], cur);
+    } catch { /* 固化失败不该让对比本身失败：结果照常返回给模型与医师 */ }
+
     const rows = cmp.items.map((it) => `| ${it.label} | ${it.last} | ${it.now} | ${it.state} |`).join('\n');
     return {
       ok: true,

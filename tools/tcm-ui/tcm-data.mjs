@@ -11,9 +11,21 @@
 //       按文件名时间戳排序、只认 case-<epoch>.json）→ loadRegistryFrom / listSnapshotFiles。
 import path from 'node:path';
 import {
-  ALL_FIELDS, FIELD_CN, OVERDUE_DAYS, DUE_SOON_DAYS, daysSince, visitLabel, REQUIRED_FIELDS,
-  followupStatus, STATUS_RANK, STATUS_CN,
-  loadRegistryFrom, listSnapshotFiles, readSnapshotFile,
+  ALL_FIELDS,
+  DUE_SOON_DAYS,
+  FIELD_CN,
+  OVERDUE_DAYS,
+  REQUIRED_FIELDS,
+  STATUS_CN,
+  STATUS_RANK,
+  daysSince,
+  deletePatient,
+  followupStatus,
+  listSnapshotFiles,
+  loadRegistryFrom,
+  readSnapshotFile,
+  updatePatient,
+  visitLabel,
 } from '../../layer/packs/tcm/pack.mjs';
 
 /**
@@ -166,4 +178,25 @@ export function patientDetail(home, id) {
     overdueDays: OVERDUE_DAYS,
     followupDraft: followupDraft(p, visits),
   };
+}
+
+
+/**
+ * 改患者基本信息（姓名/出生年/性别）。走 Pack 的实现 —— 数据口径只有一处。
+ * @param {string} home @param {string} id @param {any} patch
+ */
+export function updatePatientRow(home, id, patch) {
+  const r = updatePatient(home, id, patch || {});
+  if (!r.ok) return r;
+  return { ok: true, patient: r.patient };
+}
+
+/**
+ * 删除患者（必须显式确认）。**连带删除其病历目录**，避免留下无主病历。
+ * @param {string} home @param {string} id @param {boolean} confirm
+ */
+export function deletePatientRow(home, id, confirm) {
+  const r = deletePatient(home, id, { confirm: !!confirm });
+  if (!r.ok) return r;
+  return { ok: true, removed: r.removed };
 }

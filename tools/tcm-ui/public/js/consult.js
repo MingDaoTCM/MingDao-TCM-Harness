@@ -342,6 +342,16 @@ async function demo() {
 /** 绑定问诊视图的所有交互。由 app.js 在启动时调用一次。 */
 export function initConsult() {
   // ── 舌象照片 ──
+  /** 统一入口：拍照与选图**走同一条附件链路**（内核只看 dataUrl，不关心来源） */
+  const attachImage = (dataUrl, name) => {
+    const tip = $('#tongueTip'); const thumb = $('#thumb');
+    if (String(dataUrl).length > 7 * 1024 * 1024) { tip.textContent = '图片过大（内核限制单张 ≤5MB）'; return false; }
+    pendingAttachments = [{ type: 'image', name: name || '舌象.jpg', dataUrl }];
+    thumb.src = dataUrl; thumb.style.display = 'block';
+    tip.textContent = '已附上 —— 发送时内核会把照片交给 Dify 工作流（Dify 侧需开启视觉）。';
+    return true;
+  };
+
   $('#tongue').addEventListener('change', async (e) => {
     const f = e.target.files && e.target.files[0];
     const tip = $('#tongueTip'); const thumb = $('#thumb');
@@ -349,11 +359,53 @@ export function initConsult() {
     if (!f) { thumb.style.display = 'none'; tip.textContent = ''; return; }
     if (!/^image\//.test(f.type)) { tip.textContent = '只支持图片文件'; return; }
     const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(f); });
-    if (dataUrl.length > 7 * 1024 * 1024) { tip.textContent = '图片过大（内核限制单张 ≤5MB）'; return; }
-    pendingAttachments = [{ type: 'image', name: f.name || '舌象.jpg', dataUrl }];
-    thumb.src = dataUrl; thumb.style.display = 'block';
-    tip.textContent = '已附上 —— 发送时内核会把照片交给 Dify 工作流（Dify 侧需开启视觉）。';
+    attachImage(dataUrl, f.name);
   });
+
+  // ── 摄像头实时拍照（不看磁盘）─────────────────────────────────
+  // 为什么两条路都要：门诊常用外接摄像头/笔记本内置摄像头拍舌象，直接存盘再选是多余一步；
+  // 而历史照片、会诊传图则在磁盘上。医师不该被迫走其中一条。
+  let camStream = null;
+  const camStop = () => {
+    if (camStream) { try { camStream.getTracks().forEach((t) => t.stop()); } catch { /* 忽略 */ } camStream = null; }
+    const box = $('#camBox'); if (box) box.hidden = true;
+  };
+  $('#tonguePick').onclick = () => $('#tongue').click();
+
+  $('#tongueShot').onclick = async () => {
+    const tip = $('#tongueTip');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      tip.textContent = '当前环境不支持摄像头（已改用「选择图片」）'; $('#tongue').click(); return;
+    }
+    try {
+      tip.textContent = '正在打开摄像头…（首次会请求授权）';
+      // facingMode: environment 优先后置/外接；桌面端通常只有内置，浏览器会自行忽略
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+      const v = $('#camVideo');
+      v.srcObject = camStream;
+      await v.play().catch(() => {});
+      $('#camBox').hidden = false;
+      tip.textContent = '对准舌象后点「拍摄」。';
+    } catch (e) {
+      camStop();
+      tip.textContent = '打不开摄像头（' + (e?.name || e?.message || e) + '）—— 可改用「选择图片」';
+      $('#tongue').click();
+    }
+  };
+
+  $('#camShoot').onclick = () => {
+    const v = $('#camVideo');
+    const w = v.videoWidth || 1280; const h = v.videoHeight || 720;
+    const c = document.createElement('canvas');
+    // 长边压到 1280：舌象辨认够用，又不至于因体积超限被内核拒
+    const scale = Math.min(1, 1280 / Math.max(w, h));
+    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    const dataUrl = c.toDataURL('image/jpeg', 0.9);
+    camStop();
+    if (attachImage(dataUrl, '舌象-拍照.jpg')) $('#tongueTip').textContent += '（摄像头拍摄）';
+  };
+  $('#camCancel').onclick = () => { camStop(); $('#tongueTip').textContent = ''; };
 
   $('#compose').onclick = () => { prefillConsult(composeMessage()); };
 

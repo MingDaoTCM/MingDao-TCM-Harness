@@ -27,7 +27,7 @@ async function testAsync(name, fn) {
 
 // ── 载入被测 Pack（用临时 home，绝不碰真实患者数据） ──
 const TMP_HOME = path.join(process.env.TMPDIR || '/tmp', `tcm-pack-test-${process.pid}`);
-const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock, followupStatus, OVERDUE_DAYS, DUE_SOON_DAYS, STATUS_RANK, STATUS_CN } =
+const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock, followupStatus, OVERDUE_DAYS, DUE_SOON_DAYS, STATUS_RANK, STATUS_CN, updatePatient, deletePatient, listSnapshotFiles } =
   await import(path.join(PACK_DIR, 'pack.mjs'));
 
 const pack = createPack({ home: TMP_HOME, packDir: PACK_DIR, packName: 'tcm', log: () => {} });
@@ -531,6 +531,43 @@ await testAsync('completeness 红线只看两项必填，不因可选字段缺�
 // 收尾：清掉临时 home（测试全程不写真实 MINGDAO_HOME）
 fs.rmSync(TMP_HOME, { recursive: true, force: true });
 fs.rmSync(HOME2, { recursive: true, force: true });
+
+
+// ── 患者管理（用户要求：可编辑、修改、删除）──────────────────────────────
+await testAsync('★ updatePatient：只动基本信息，病历与就诊记录一律不碰', async () => {
+  const reg = await tool('patient_register').run({ name: '张三', birth: '1985', sex: '女' }, {});
+  assert.equal(reg.ok, true, reg.error);
+  const pid = reg.data.patientId;
+  await tool('intake_collect').run({ patientId: pid, consultText: '主诉：失眠\n现病史：三个月' },
+    stub({ 'intake-extract': { complete: true, ...F } }));
+
+  const up = updatePatient(TMP_HOME, pid, { name: '张三丰', birth: '1986' });
+  assert.equal(up.ok, true, up.error);
+  assert.equal(up.patient.name, '张三丰');
+  assert.equal(up.patient.birth, '1986');
+  assert.equal(snapshotFiles(pid).length, 1, '改姓名不该影响就诊记录');
+
+  assert.equal(updatePatient(TMP_HOME, pid, { name: '   ' }).ok, false, '空姓名应被拒');
+  assert.equal(updatePatient(TMP_HOME, pid, { sex: '未知' }).ok, false, '非法性别应被拒');
+  assert.equal(updatePatient(TMP_HOME, 'P999', { name: 'x' }).ok, false, '不存在的病历号应被拒');
+});
+
+await testAsync('★ deletePatient：必须显式确认，且**连带删掉病历目录**（不留无主病历）', async () => {
+  const reg = await tool('patient_register').run({ name: '李四', birth: '1990', sex: '男' }, {});
+  const pid = reg.data.patientId;
+  await tool('intake_collect').run({ patientId: pid, consultText: '主诉：咳嗽\n现病史：两周' },
+    stub({ 'intake-extract': { complete: true, ...F } }));
+  assert.equal(snapshotFiles(pid).length, 1);
+
+  assert.equal(deletePatient(TMP_HOME, pid).ok, false, '不带 confirm 必须拒绝');
+  const del = deletePatient(TMP_HOME, pid, { confirm: true });
+  assert.equal(del.ok, true, del.error);
+  assert.ok(del.removed >= 1, '应报告删掉了几份病历');
+  const after = JSON.parse(fs.readFileSync(path.join(TMP_HOME, 'patients.json'), 'utf8'));
+  assert.ok(!after.patients[pid], '注册表里不该还有这个病历号');
+  assert.ok(!fs.existsSync(path.join(TMP_HOME, 'intake', pid)), '病历目录应被删除');
+  assert.equal(deletePatient(TMP_HOME, pid, { confirm: true }).ok, false, '重复删除应报不存在');
+});
 
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

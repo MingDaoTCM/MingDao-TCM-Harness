@@ -8,8 +8,10 @@
 //   · 「留空 = 不改」由服务端定义，前端不自行判断，避免"改一个字段把另一个抹了"。
 import { $ } from './util.js';
 
-const SITE_URL = 'https://tcm.mingdao.ai/';
-const FEEDBACK_URL = 'https://harness.mingdao.ai/forum/';
+let SITE = 'https://tcm.mingdao.ai';
+const SITE_URL = () => SITE + '/';
+// 反馈指向**本站论坛**（此前误指上游论坛 —— 用户报"问题反馈链接错了"）
+const FEEDBACK_URL = 'https://tcm.mingdao.ai/forum/';
 
 /** 底部/设置页共用的提示位 */
 function say(el, text, kind = '') {
@@ -19,11 +21,32 @@ function say(el, text, kind = '') {
   node.textContent = text;
 }
 
+/**
+ * 全局提示（跨视图可见）。
+ * 为什么需要它：底部「检查更新」在任何视图都能点，而结果原先写进 `#setMsg` ——
+ * 那个元素只存在于**设置页**，于是从别的页面点等于"没反应"（用户实测报的）。
+ */
+let toastTimer = null;
+function toast(text, kind = '') {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.className = 'toast ' + kind;
+  el.textContent = text;
+  el.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 8000);
+}
+
 async function loadSettings() {
   const r = await fetch('/api/tcm/settings', { cache: 'no-store' });
   const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
   if (!j.ok) { say('#setMsg', '✗ ' + (j.error || '读取失败'), 'err'); return null; }
   const s = j.settings;
+  if (j.siteUrl) SITE = String(j.siteUrl).replace(/\/+$/, '');
   $('#setHome').textContent = j.home || '—';
   $('#setDifyBase').value = s.difyBaseUrl || '';
   $('#setOrchBase').value = s.orchBaseUrl || '';
@@ -59,19 +82,23 @@ async function saveSettings() {
 
 /** 检查更新：由本机代理去问站点（浏览器直连会撞 CORS） */
 async function checkUpdate() {
+  toast('正在检查更新…', 'dim');
   say('#setMsg', '正在检查更新…', 'dim');
   try {
     const r = await fetch('/api/tcm/update', { cache: 'no-store' });
     const j = await r.json();
     const cur = j.current ? `当前 v${j.current}` : '当前版本未知';
     if (j.status === 'newer') {
-      say('#setMsg', `发现新版本 v${j.latest}（${cur}）—— 点底部「访问官网」去下载页`, 'ok');
+      const msg = `发现新版本 v${j.latest}（${cur}）—— 点底部「访问官网」去下载页`;
+      toast(msg, 'ok'); say('#setMsg', msg, 'ok');
     } else if (j.status === 'current') {
-      say('#setMsg', `已是最新版本（v${j.latest}）`, 'ok');
+      toast(`已是最新版本（v${j.latest}）`, 'ok'); say('#setMsg', `已是最新版本（v${j.latest}）`, 'ok');
     } else {
-      say('#setMsg', `暂时查不到最新版本（${cur}）：${j.reason || '未知原因'}`, 'warn');
+      const msg = `暂时查不到最新版本（${cur}）：${j.reason || '未知原因'}`;
+      toast(msg, 'warn'); say('#setMsg', msg, 'warn');
     }
   } catch (e) {
+    toast('✗ 检查更新失败：' + (e?.message || e), 'err');
     say('#setMsg', '✗ 检查更新失败：' + (e?.message || e), 'err');
   }
 }
@@ -81,7 +108,7 @@ export function initSettings() {
   $('#setReload').onclick = () => loadSettings().catch(() => {});
 
   // 底部链接：用系统浏览器打开（Electron 的外链拦截会把它交给默认浏览器）
-  $('#linkSite').onclick = (e) => { e.preventDefault(); window.open(SITE_URL, '_blank', 'noopener'); };
+  $('#linkSite').onclick = (e) => { e.preventDefault(); window.open(SITE_URL(), '_blank', 'noopener'); };
   $('#linkFeedback').onclick = (e) => { e.preventDefault(); window.open(FEEDBACK_URL, '_blank', 'noopener'); };
   $('#linkUpdate').onclick = (e) => { e.preventDefault(); checkUpdate(); };
   $('#linkAbout').onclick = (e) => {

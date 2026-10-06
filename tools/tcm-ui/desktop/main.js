@@ -9,7 +9,7 @@
 //   cd tools/tcm-ui/desktop && npm install && npm start
 // 无窗口自检：  MINGDAO_TCM_DESKTOP_SMOKE=1 npm start
 // 出安装包：    npm run dist:linux   （Windows/macOS 见 package.json；需设 MINGDAO_KERNEL 之外的镜像已内置）
-import { app, BrowserWindow, shell, dialog, Menu, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, shell, dialog, Menu, Tray, nativeImage, session } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -196,7 +196,7 @@ function buildAppMenu() {
 }
 
 /** 起内核 + 问诊台（逻辑全在 orchestrator，这里只负责报错与退出） */
-async function boot({ silent = false } = {}) {
+async function boot({ silent = false, appVersion = '' } = {}) {
   const appRoot = resolveAppRoot({ here: __dirname, resourcesPath: process.resourcesPath, packaged: app.isPackaged });
   const kernelRoot = resolveKernelRoot({ appRoot, resourcesPath: process.resourcesPath });
   if (!kernelRoot) {
@@ -204,7 +204,7 @@ async function boot({ silent = false } = {}) {
     return null;
   }
   try {
-    return await startApp({ appRoot, kernelRoot, quiet: true });
+    return await startApp({ appRoot, kernelRoot, quiet: true, appVersion });
   } catch (e) {
     fail(`启动失败：${e?.message || e}`, silent);
     return null;
@@ -268,13 +268,18 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => { if (running) show(running.uiUrl); });
 
   app.whenReady().then(async () => {
-    running = await boot({ silent: smoke });
+    running = await boot({ silent: smoke, appVersion: app.getVersion() });
     if (!running) {
       // 冒烟必须**非 0 退出**：CI 只认退出码，弹窗在无头环境里等于挂住
       if (smoke) { console.error('MINGDAO_TCM_DESKTOP_SMOKE_FAILED'); app.exit(1); }
       else app.quit();
       return;
     }
+    // 摄像头：桌面版要能「拍舌象」。Electron 的默认策略不保证放行 media，
+    // 这里显式只放行 media，其余（地理位置/通知/剪贴板…）一律拒 —— 问诊台用不到。
+    try {
+      session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
+    } catch (/** @type {any} */ e) { console.warn('[perm] 权限处理器设置失败：' + (e?.message || e)); }
     // 自动更新：装完就不用再手动下载（后台检查，失败不打扰）
     initAutoUpdate().catch(() => {});
     // 菜单**在冒烟分支之前**就建好：CI 那次 xvfb 冒烟于是也覆盖了菜单模板。

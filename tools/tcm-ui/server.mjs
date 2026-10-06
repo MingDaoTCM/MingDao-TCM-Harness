@@ -23,7 +23,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { roster, patientDetail, reminders } from './tcm-data.mjs';
+import { roster, patientDetail, reminders, updatePatientRow, deletePatientRow } from './tcm-data.mjs';
 import { readSettings, writeSettings } from './settings.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -147,7 +147,28 @@ function handleTcm(/** @type {any} */ req, /** @type {any} */ res, /** @type {st
     }
     const m = /^\/api\/tcm\/patients\/(.+)$/.exec(u.pathname);
     if (m) {
-      const r = patientDetail(home, decodeURIComponent(m[1]));
+      const pid = decodeURIComponent(m[1]);
+      // 改患者：只动姓名/出生年/性别（病历内容一律不碰）
+      if (req.method === 'POST' || req.method === 'PATCH') {
+        readBody(req).then((raw) => {
+          let body = null;
+          try { body = JSON.parse(raw || '{}'); } catch { json(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
+          const r = updatePatientRow(home, pid, body || {});
+          json(res, r.ok ? 200 : 400, r);
+        }).catch((e) => json(res, 400, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      // 删患者：必须带 confirm:true（并连带删病历目录）
+      if (req.method === 'DELETE') {
+        readBody(req).then((raw) => {
+          let body = null;
+          try { body = JSON.parse(raw || '{}'); } catch { body = {}; }
+          const r = deletePatientRow(home, pid, body?.confirm === true);
+          json(res, r.ok ? 200 : 400, r);
+        }).catch((e) => json(res, 400, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      const r = patientDetail(home, pid);
       json(res, r.ok ? 200 : 404, r);
       return;
     }
