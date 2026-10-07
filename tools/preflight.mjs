@@ -116,10 +116,31 @@ console.log('\n[5] 上一版发布状态');
 const prevTag = (() => { const r = run('git', ['tag', '-l', 'v0.1.*']); return (r.out.split('\n').filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).pop() || '').trim(); })();
 if (!prevTag) ok('尚无历史 tag');
 else {
-  const r = run('gh', ['release', 'view', prevTag, '--json', 'assets', '-q', '.assets[].name'], { cwd: REPO });
+  // token 从工作区的 .env 取（有就给 gh，没有就明说"查不了"）——
+  // ⚠ 查询失败 ≠ 资产为 0。把"查不了"报成"资产不足"就是**假警报**，
+  //   而假警报刷多了人就不看审计了，与审计骗人是同一类危害。
+  let token = process.env.GH_TOKEN || process.env.MINGDAO_GITHUB_TOKEN || '';
+  if (!token) {
+    try {
+      const env = fs.readFileSync(path.resolve(REPO, '..', 'MingDao-Harness', '.env'), 'utf8');
+      token = (env.match(/^MINGDAO_GITHUB_TOKEN=(.*)$/m) || [])[1]?.trim() || '';
+    } catch { /* 没有就算了 */ }
+  }
+  const r = run('gh', ['release', 'view', prevTag, '--json', 'assets', '-q', '.assets[].name'],
+    { cwd: REPO, env: token ? { ...process.env, GH_TOKEN: token } : process.env });
   const names = r.out.split('\n').filter(Boolean);
-  if (r.code === 0 && names.length >= 5) ok(`上一版 ${prevTag} 已发布`, `${names.length} 个资产`);
-  else console.log(`  ⚠ 上一版 ${prevTag} 的 Release 资产不足（${names.length} 个）—— 确认不是"发了一半"`);
+  const queryFailed = r.code !== 0 && /auth|token|not found|error/i.test(r.out);
+  // 刚打的 tag 天然还没有 Release（正在构建）—— 那不是"发了一半"，
+  // 报成警告同样是假警报。只有**创建超过 60 分钟**且资产不足才值得提醒。
+  const ageMin = (() => {
+    const t = run('git', ['log', '-1', '--format=%ct', prevTag]);
+    const ct = Number((t.out || '').trim());
+    return ct ? (Date.now() / 1000 - ct) / 60 : 0;
+  })();
+  if (!queryFailed && names.length >= 5) ok(`上一版 ${prevTag} 已发布`, `${names.length} 个资产`);
+  else if (!queryFailed && ageMin < 60) console.log(`  － ${prevTag} 刚打 tag（${Math.round(ageMin)} 分钟前），Release 仍在构建/推送中 —— 不作为问题`);
+  else if (queryFailed) console.log(`  － 上一版 ${prevTag} 的发布状态**未能查询**（gh 未认证 / 无网络）—— 未验证，不代表有问题`);
+  else console.log(`  ⚠ 上一版 ${prevTag} 的 Release 资产确实不足（${names.length} 个）—— 确认不是"发了一半"`);
 }
 
 // ── 6. 摄像头端到端（可选：需要 Electron + 图形环境，跑不了就明确跳过）
