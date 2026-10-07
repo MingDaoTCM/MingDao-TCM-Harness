@@ -105,6 +105,11 @@ nsis:
   artifactName: mingdao-tcm-setup-${version}-${arch}.${ext}
 
 mac:
+  # ⚠ macOS **硬性要求**：访问摄像头必须在 Info.plist 里声明用途说明，
+  #   否则系统直接拒绝（与 Electron 的权限处理器无关）。缺了它，macOS 上「拍舌象」
+  #   必然失败 —— 用户实测三平台都打不开摄像头，这里是 macOS 那一份的真因。
+  extendInfo:
+    NSCameraUsageDescription: 用于拍摄舌象照片，随本次问诊一起提交给问诊工作流。
   target:
     - dmg
     - zip # 自动更新需要 zip（将来接入 electron-updater 时）；dmg 供手动安装
