@@ -379,13 +379,32 @@ export function initConsult() {
     }
     try {
       tip.textContent = '正在打开摄像头…（首次会请求授权）';
+      // ⚠ 取景框必须**先显示再挂流**：video 在 display:none 的容器里挂 srcObject，
+      //   在 Windows/macOS 的 Electron 上会一直渲染黑屏（用户实测："一个黑框，无图像"）。
+      $('#camBox').hidden = false;
       // facingMode: environment 优先后置/外接；桌面端通常只有内置，浏览器会自行忽略
       camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
       const v = $('#camVideo');
       v.srcObject = camStream;
-      await v.play().catch(() => {});
-      $('#camBox').hidden = false;
-      tip.textContent = '对准舌象后点「拍摄」。';
+      // 等元数据：videoWidth 要 loadedmetadata 之后才有效，否则「拍摄」抓到的是 0×0 空图
+      await new Promise((res) => {
+        if (v.readyState >= 1 && v.videoWidth) return res();
+        const timer = setTimeout(res, 3000);
+        v.addEventListener('loadedmetadata', () => { clearTimeout(timer); res(); }, { once: true });
+      });
+      // play() 的失败**不再吞掉** —— 吞掉的话界面只剩一个黑框，谁也看不出为什么
+      let playErr = null;
+      try { await v.play(); } catch (/** @type {any} */ e) { playErr = e; console.warn('[camera] play() 失败：' + (e?.name || '') + ' ' + (e?.message || '')); }
+      const track = camStream.getVideoTracks()[0];
+      if (!track || track.readyState !== 'live') throw new Error('摄像头轨道未就绪（' + (track?.readyState || '无轨道') + '）');
+      const label = track.label || '未知设备';
+      if (playErr) {
+        tip.textContent = '摄像头已打开（' + label + '），但画面未能开始播放：' + (playErr.name || playErr.message || playErr) + ' —— 可改用「选择图片」';
+      } else if (!v.videoWidth) {
+        tip.textContent = '摄像头已打开（' + label + '）但尚未出画面 —— 稍等一两秒再点「拍摄」；若一直黑屏请改用「选择图片」';
+      } else {
+        tip.textContent = '对准舌象后点「拍摄」（' + v.videoWidth + '×' + v.videoHeight + '，设备：' + label + '）';
+      }
     } catch (e) {
       camStop();
       // 把失败原因讲清楚：这几种的处理方式完全不同，含糊报错等于让人干瞪眼
@@ -396,13 +415,19 @@ export function initConsult() {
         : (e?.name || e?.message || String(e));
       tip.textContent = '打不开摄像头：' + why + ' —— 可改用「选择图片」';
       console.warn('[camera] getUserMedia 失败：' + (e?.name || '') + ' ' + (e?.message || ''));
-      $('#tongue').click();
     }
   };
 
   $('#camShoot').onclick = () => {
     const v = $('#camVideo');
-    const w = v.videoWidth || 1280; const h = v.videoHeight || 720;
+    const tip = $('#tongueTip');
+    // ⚠ 不能再拿 1280×720 顶替：元数据没加载时 videoWidth 是 0，
+    //   那样 drawImage 出来是空图，而界面还显示"已附上" —— 比报错更糟。
+    if (!v.videoWidth || !v.videoHeight) {
+      tip.textContent = '还没有画面可拍（摄像头未出图）—— 稍等一两秒再试，或改用「选择图片」';
+      return;
+    }
+    const w = v.videoWidth; const h = v.videoHeight;
     const c = document.createElement('canvas');
     // 长边压到 1280：舌象辨认够用，又不至于因体积超限被内核拒
     const scale = Math.min(1, 1280 / Math.max(w, h));
@@ -410,7 +435,7 @@ export function initConsult() {
     c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
     const dataUrl = c.toDataURL('image/jpeg', 0.9);
     camStop();
-    if (attachImage(dataUrl, '舌象-拍照.jpg')) $('#tongueTip').textContent += '（摄像头拍摄）';
+    if (attachImage(dataUrl, '舌象-拍照.jpg')) tip.textContent += '（摄像头拍摄 ' + c.width + '×' + c.height + '）';
   };
   $('#camCancel').onclick = () => { camStop(); $('#tongueTip').textContent = ''; };
 
