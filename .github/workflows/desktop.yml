@@ -19,7 +19,26 @@ permissions:
   contents: write # 发 Release 需要
 
 jobs:
+  # ── 发版前审计：**不过就不构建** ───────────────────────────────────────────
+  # 为什么要设在 CI 里而不是靠人记得跑：本项目连续几次"发布才发现"的失败都是
+  # 「本机跑不出来、只有打包/装机才暴露」那一类。人一定会忘，机器不会。
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: MingDaoTCM/MingDao-Harness
+          path: kernel
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: 审计（门禁 + 打包布局 + 装机配置）
+        env:
+          MINGDAO_KERNEL: ${{ github.workspace }}/kernel
+        run: node tools/preflight.mjs --quick
+
   build:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
