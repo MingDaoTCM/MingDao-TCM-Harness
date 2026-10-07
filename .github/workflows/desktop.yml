@@ -177,8 +177,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 推站点（单条流）+ 校验
-        timeout-minutes: 150
+      - name: 推站点 + 校验
+        # 带上 zip 之后单次推送约 600MB；服务器上行 ~50-100KB/s，本来就要数小时量级。
+        # v0.1.21 实测：150 分钟上限被顶到，站点停在半截 —— 五个安装包与两个 zip 到了，
+        # Windows .exe 与 manifest.json 没到 → /api/latest 回空、**下载页空白**。
+        # 这比"没发版"更糟：线上是坏的。上限提到 300。
+        timeout-minutes: 300
         env:
           GH_TOKEN: ${{ github.token }}
           TCM_SSH_KEY: ${{ secrets.TCM_DEPLOY_SSH_KEY }}
