@@ -397,5 +397,20 @@ await testAsync('★ 前端不得把 SITE_URL（函数）当字符串插进文�
   assert.ok(!/内部站点/.test(srv), '站点已公开，注释与文案都该同步');
 });
 
+
+await testAsync('★ 检查更新必须真的自动下载：辅助函数要被调用，且不得再有"前往下载"', async () => {
+  const raw = fs.readFileSync(path.join(UI_DIR, 'desktop', 'main.js'), 'utf8');
+  // 剥掉行注释再判：注释里会**提到**旧文案（解释为什么要改），那不是代码里还有它
+  const main = raw.replace(/^\s*\/\/.*$/gm, '');
+  // ① 曾经只写了 downloadInstaller/installHint 却没接上调用 —— 连续几个版本点检查更新仍弹"前往下载"
+  assert.ok(/downloadInstaller\(/.test(main.replace(/function downloadInstaller\(/, '')),
+    'downloadInstaller 必须被真正调用（不能只定义）');
+  assert.ok(/pickArtifact\(/.test(main.replace(/import[^;]*pickArtifact[^;]*;/, '')), 'pickArtifact 必须被调用');
+  assert.ok(/setProgressBar/.test(main), '下载应给任务栏进度');
+  // ② 旧文案必须消失：它意味着又退回了"给你个链接自己去下"
+  assert.ok(!/前往下载/.test(main), '不得再出现"前往下载"（那是手动下载的老路径）');
+  assert.ok(/立即下载并安装/.test(main), '应提供"立即下载并安装"');
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

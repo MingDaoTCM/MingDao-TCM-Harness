@@ -178,13 +178,56 @@ async function checkUpdates() {
     return show({ type: 'info', title: '检查更新', message: '已通过环境变量关闭检查更新', detail: `当前版本 v${cur}` });
   }
   if (r.status === 'newer') {
+    // ★ 自动下载：**不再让医师自己去网页找**。
+    //   先问一句是尊重带宽（安装包 60-100MB），确认后全程自动：
+    //   挑包 → 下载（任务栏进度）→ 弹"已下载 + 怎么装" → 直接打开安装程序。
+    //   ⚠ 这段曾被写成"只加辅助函数、没接上调用"（那次 s.replace 静默失配），
+    //     结果连续几个版本点「检查更新」仍然弹"前往下载" —— 现在由测试守着。
     const pick = await show({
       type: 'info', title: '检查更新',
       message: `发现新版本 v${r.latest}（当前 v${cur}）`,
-      detail: `是否现在打开下载页？下载页需要访问密码。\n${SITE_URL}/`,
-      buttons: ['前往下载', '稍后'], defaultId: 0, cancelId: 1,
+      detail: '是否现在自动下载并安装？下载完成后会直接打开安装程序。',
+      buttons: ['立即下载并安装', '稍后'], defaultId: 0, cancelId: 1,
     });
-    if (pick?.response === 0) openExternal(`${SITE_URL}/`);
+    if (pick?.response !== 0) return;
+
+    // 按本机平台/架构从站点清单里挑对应的安装包
+    let name = '';
+    try {
+      const mres = await fetch(`${SITE_URL}/api/downloads`, { cache: 'no-store' });
+      const mj = await mres.json();
+      name = pickArtifact(mj?.files || [], process.platform, process.arch, { appImage: !!process.env.APPIMAGE });
+    } catch (/** @type {any} */ e) { console.warn('[update] 取清单失败：' + (e?.message || e)); }
+    if (!name) {
+      const x = await show({
+        type: 'warning', title: '检查更新',
+        message: `站点上找不到适配本机（${process.platform}/${process.arch}）的安装包`,
+        detail: `可以手动打开下载页选择：${SITE_URL}/`,
+        buttons: ['打开下载页', '知道了'], defaultId: 0, cancelId: 1,
+      });
+      if (x?.response === 0) openExternal(`${SITE_URL}/`);
+      return;
+    }
+
+    try {
+      win?.setProgressBar(0.01);
+      const dest = await downloadInstaller(`${SITE_URL}/downloads/${encodeURIComponent(name)}`, name,
+        (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } });
+      win?.setProgressBar(-1);
+      await show({ type: 'info', title: '更新已下载', message: `v${r.latest} 已下载完成`, detail: installHint(dest) });
+      const err = await shell.openPath(dest);              // 直接打开安装程序
+      if (err) { console.warn('[update] 打开安装包失败：' + err); openExternal(`${SITE_URL}/`); }
+    } catch (/** @type {any} */ e) {
+      win?.setProgressBar(-1);
+      console.warn('[update] 下载失败：' + (e?.message || e));
+      const x = await show({
+        type: 'warning', title: '检查更新',
+        message: '下载失败',
+        detail: `原因：${e?.message || e}\n也可以手动打开下载页：${SITE_URL}/`,
+        buttons: ['打开下载页', '知道了'], defaultId: 0, cancelId: 1,
+      });
+      if (x?.response === 0) openExternal(`${SITE_URL}/`);
+    }
     return;
   }
   if (r.status === 'current') {
