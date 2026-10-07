@@ -73,7 +73,12 @@
         </div>
         <input id="tongue" type="file" accept="image/*" hidden />
         <div id="camBox" class="cambox" hidden>
-          <video id="camVideo" playsinline autoplay muted></video>
+          <!-- video 只做**数据源**（隐藏）：Electron 在 Windows/macOS 上把 getUserMedia 的
+               video 合成到窗口时常年黑屏（解码正常、只是没画出来）。可见画面改用 canvas ——
+               requestAnimationFrame 里 drawImage 走的是另一条渲染路径，稳定出图；
+               而且预览与拍摄是**同一块画布**，所见即所拍。 -->
+          <video id="camVideo" playsinline autoplay muted style="display:none"></video>
+          <canvas id="camCanvas" class="camview" width="640" height="480"></canvas>
           <div class="row" style="margin-top:8px">
             <button class="primary" id="camShoot" style="flex:1">拍摄</button>
             <button class="ghost" id="camCancel">取消</button>

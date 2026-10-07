@@ -96,6 +96,22 @@ try {
   for (const [re, name, why] of need) { if (re.test(yml)) ok(`electron-builder.yml：${name}`); else bad('electron-builder.yml', why); }
 } catch (e) { bad('electron-builder.yml', String(e?.message || e)); }
 
+// ── 3b. 自动更新链路：站点必须带 zip + 更新元数据
+//        这两样缺任何一个，客户端就退化成"下载安装包再手动装"（用户反馈的"不够智能"）。
+//        mac 的 electron-updater 用 **zip** 做增量更新，dmg 只供人工安装 —— 所以 zip 必须上站。
+console.log('\n[3b] 自动更新链路');
+try {
+  const wf = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'desktop.yml'), 'utf8');
+  if (/case "\$f" in \._\*\) ;; \*\) SITE_FILES/.test(wf)) ok('站点推送包含 zip（mac 自动更新需要）');
+  else bad('站点推送', 'SITE_FILES 把 zip 排除了 → electron-updater 在 macOS 上必然失败，只能手动装');
+  const fa = fs.readFileSync(path.join(REPO, 'site', 'fetch-assets.py'), 'utf8');
+  if (/\.zip/.test(fa) && /not x\['name'\]\.endswith\('\.zip'\)/.test(fa)) bad('对账口径', '把 zip 排除在对账之外 → 站点多出 zip 时会拒绝写清单');
+  else ok('对账口径包含 zip');
+  // 页面清单仍不该展示 zip（那是给医师点的安装包列表）
+  if (/is_update_meta\(n\) or n\.endswith\('\.zip'\)/.test(fa)) ok('页面清单不展示 zip / 更新元数据');
+  else bad('页面清单', 'zip 或 latest*.yml 会出现在下载列表里（医师不该看到它们）');
+} catch (e) { bad('自动更新链路', String(e?.message || e)); }
+
 // ── 4. 静默失败扫描（只提示，不判失败：有些是合理的，需要人看一眼）
 console.log('\n[4] 静默失败扫描（提示）');
 const risky = [];

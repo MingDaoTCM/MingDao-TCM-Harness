@@ -211,7 +211,11 @@ jobs:
           # 页面只按 dmg/exe/deb/AppImage 展示；zip 是自动更新用的，白占慢带宽（仍在 Release 里）
           SITE_FILES=()
           # 站点推：安装包（不含 zip）+ 更新元数据 latest*.yml（自动更新要从站点读）
-          while IFS= read -r f; do case "$f" in *.zip) ;; *) SITE_FILES+=("$f");; esac; done < <(ls -1 "$DL" | sort)
+          # ⚠ 站点要带上 **.zip**：electron-updater 在 macOS 上是用 zip 做增量更新的
+          #   （dmg 只供人工安装）。排除 zip 的后果是 mac 自动更新永远失败、
+          #   只能落到"下载安装包再手动装"——用户反馈的"不够智能"就是这个。
+          #   （页面清单仍然不展示 zip：那是 fetch-assets.py 的 manifest 过滤负责的。）
+          while IFS= read -r f; do case "$f" in ._*) ;; *) SITE_FILES+=("$f");; esac; done < <(ls -1 "$DL" | sort)
           printf '  推站点：\n'; printf '    %s\n' "${SITE_FILES[@]}"
 
           TARGET="${TCM_TARGET:-root@8.210.103.117}"; HOST="${TARGET#*@}"

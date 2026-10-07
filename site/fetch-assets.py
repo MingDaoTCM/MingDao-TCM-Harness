@@ -138,7 +138,7 @@ def main():
             # 若把 zip 也算进来，会永远判定"缺文件"→ 拒绝写清单 → 页面空白。
             # 2026-10-01 实测踩到：v0.1.9 五个包都传上去了，清单却因为这条一直不生成。
             return {x['name']: x['size'] for x in rel.get('assets', [])
-                    if (is_installer(x['name']) and not x['name'].endswith('.zip')) or is_update_meta(x['name'])}
+                    if is_installer(x['name']) or is_update_meta(x['name'])}
         except Exception as e:  # noqa: BLE001 —— 取不到不该挡住写清单（会退化为粗检并告警）
             print('  ! 取 Release 资产大小失败（退化为粗检）：%s' % e, flush=True)
             return None
@@ -176,8 +176,8 @@ def main():
         for n in sorted(os.listdir(d)):
             if not (is_installer(n) or is_update_meta(n)):
                 continue
-            if is_update_meta(n):
-                continue          # 更新元数据只校验存在与大小，不进清单
+            if is_update_meta(n) or n.endswith('.zip'):
+                continue          # 更新元数据与 zip 只校验存在与大小，**不进页面清单**（页面只给人点安装包）
             p = os.path.join(d, n)
             size = os.path.getsize(p)
             if want is not None and size != want[n]:

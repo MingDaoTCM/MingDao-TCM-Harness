@@ -367,6 +367,7 @@ export function initConsult() {
   // 而历史照片、会诊传图则在磁盘上。医师不该被迫走其中一条。
   let camStream = null;
   const camStop = () => {
+    if (typeof stopPreview === 'function') stopPreview();
     if (camStream) { try { camStream.getTracks().forEach((t) => t.stop()); } catch { /* 忽略 */ } camStream = null; }
     const box = $('#camBox'); if (box) box.hidden = true;
   };
@@ -398,6 +399,7 @@ export function initConsult() {
       const track = camStream.getVideoTracks()[0];
       if (!track || track.readyState !== 'live') throw new Error('摄像头轨道未就绪（' + (track?.readyState || '无轨道') + '）');
       const label = track.label || '未知设备';
+      startPreview();
       if (playErr) {
         tip.textContent = '摄像头已打开（' + label + '），但画面未能开始播放：' + (playErr.name || playErr.message || playErr) + ' —— 可改用「选择图片」';
       } else if (!v.videoWidth) {
@@ -418,6 +420,23 @@ export function initConsult() {
     }
   };
 
+  /** 把 video 的帧泵到 canvas 上（预览与拍摄共用这一块画布） */
+  let previewTimer = null;
+  function startPreview() {
+    const v = $('#camVideo'); const c = $('#camCanvas');
+    if (!v || !c) return;
+    const ctx = c.getContext('2d');
+    const paint = () => {
+      if (!v.videoWidth) { previewTimer = requestAnimationFrame(paint); return; }
+      if (c.width !== v.videoWidth || c.height !== v.videoHeight) { c.width = v.videoWidth; c.height = v.videoHeight; }
+      try { ctx.drawImage(v, 0, 0, c.width, c.height); } catch { /* 偶发失败不致命，下一帧再试 */ }
+      previewTimer = requestAnimationFrame(paint);
+    };
+    stopPreview();
+    previewTimer = requestAnimationFrame(paint);
+  }
+  function stopPreview() { if (previewTimer) { cancelAnimationFrame(previewTimer); previewTimer = null; } }
+
   $('#camShoot').onclick = () => {
     const v = $('#camVideo');
     const tip = $('#tongueTip');
@@ -428,11 +447,14 @@ export function initConsult() {
       return;
     }
     const w = v.videoWidth; const h = v.videoHeight;
+    // 直接从**预览画布**取（所见即所拍），再按长边 1280 缩放
+    const src = $('#camCanvas');
     const c = document.createElement('canvas');
-    // 长边压到 1280：舌象辨认够用，又不至于因体积超限被内核拒
     const scale = Math.min(1, 1280 / Math.max(w, h));
     c.width = Math.round(w * scale); c.height = Math.round(h * scale);
-    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    const ctx = c.getContext('2d');
+    try { ctx.drawImage(src && src.width ? src : v, 0, 0, c.width, c.height); }
+    catch { ctx.drawImage(v, 0, 0, c.width, c.height); }
     const dataUrl = c.toDataURL('image/jpeg', 0.9);
     camStop();
     if (attachImage(dataUrl, '舌象-拍照.jpg')) tip.textContent += '（摄像头拍摄 ' + c.width + '×' + c.height + '）';
