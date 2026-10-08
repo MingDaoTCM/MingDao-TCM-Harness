@@ -198,8 +198,16 @@ jobs:
           echo "  Release 资产共 $N 个"
           [ "$N" -ge 5 ] || { echo "::error title=release-assets::Release 资产过少（$N 个）"; exit 1; }
           # 自动更新依赖 latest*.yml —— 少了它，客户端永远"已是最新"（静默失效）
-          gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name' | grep -q '^latest' \
-            || { echo "::error title=no-update-meta::Release 里没有 latest*.yml，自动更新不可用"; exit 1; }
+          # ⚠ 这里**不能用 `gh … | grep -q`**：脚本开了 `set -o pipefail`，而 `grep -q`
+          #   一匹配就退出 → gh 继续写时吃到 SIGPIPE（141）→ pipefail 把整条管道判为失败
+          #   → 明明资产齐全却报"没有 latest*.yml"。这个坑**间歇性**发作（v0.1.21/24 挂、
+          #   22/23 过，取决于 gh 是否在 grep 退出前写完），查起来极费劲。
+          #   改成先把清单取进变量、再用 shell 模式匹配，彻底不进管道。
+          ASSETS="$(gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name')"
+          case "$ASSETS" in
+            *latest.yml*|*latest-mac.yml*) : ;;
+            *) echo "::error title=no-update-meta::Release 里没有 latest*.yml，自动更新不可用"; exit 1 ;;
+          esac
 
           if [ -z "${TCM_SSH_KEY:-}" ]; then
             echo "::notice::未配置 TCM_DEPLOY_SSH_KEY，跳过站点推送（可用 site/deploy.sh 补）"; exit 0

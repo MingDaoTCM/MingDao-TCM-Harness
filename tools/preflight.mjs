@@ -141,6 +141,24 @@ try {
   for (const [re, why] of checks) { if (re.test(main)) ok('客户端：' + why); else bad('main.js', '缺：' + why); }
 } catch (e) { bad('main.js', String(e?.message || e)); }
 
+// ── 3c2. shell 陷阱：`set -o pipefail` 下的 `… | grep -q`
+//        为什么单列一条：grep -q 一匹配就退出 → 上游命令收到 SIGPIPE（141）→
+//        pipefail 把整条管道判为失败。表现是「资产明明齐了却报缺」，而且**间歇性**发作
+//        （v0.1.21 挂、22 过、23 过、24 挂），排查成本极高。
+console.log('\n[3c2] shell 陷阱');
+try {
+  const wf = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'desktop.yml'), 'utf8');
+  // 只看**真正执行的行**：注释里提到这个陷阱是正常的（那条注释就是在解释它）
+  // ⚠ 必须先剥掉 `||`：它里面的竖线不是管道（`grep -q X file || { ... }` 是安全的，
+  //   上一版规则把这种当成了违规，属于假警报 —— 而假警报刷多了人就不看审计了）
+  const risky = wf.split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .map((l) => l.replace(/\|\|/g, ''))
+    .filter((l) => l.includes('|') && /\bgrep\s+-q/.test(l));
+  if (!risky.length) ok('workflow 无「管道 + grep -q」（pipefail 下会因 SIGPIPE 误判）');
+  else bad('workflow', '仍有 pipefail+grep -q 管道（间歇性误判）：' + risky.map((l) => l.trim().slice(0, 60)).join(' / '));
+} catch (e) { bad('workflow', String(e?.message || e)); }
+
 // ── 3d. 已知差距（明示，不判失败）：差量更新
 //        上游 DESKTOP-AUTO-UPDATE.md §7 第 7 条：没有 .blockmap 时三平台**每次都整包重下**
 //        （exe 76MB / mac zip 93-101MB / AppImage 104MB）。本项目在 CI 里**显式丢弃 blockmap**，
