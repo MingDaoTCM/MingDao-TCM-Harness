@@ -124,6 +124,39 @@ try {
   else bad('页面清单', 'zip 或 latest*.yml 会出现在下载列表里（医师不该看到它们）');
 } catch (e) { bad('自动更新链路', String(e?.message || e)); }
 
+// ── 3c. 自动更新的客户端纪律（借鉴上游 DESKTOP-AUTO-UPDATE.md §6.1）
+//        这几条都是上游**真机踩过**的：模块导出缺失、监听器抛错中断事件派发、
+//        deb 形态自更新必抛、本地化错误文案导致重试永不触发。写成断言，免得再退化。
+console.log('\n[3c] 自动更新客户端纪律');
+try {
+  const main = fs.readFileSync(path.join(DESKTOP, 'main.js'), 'utf8');
+  const checks = [
+    [/mod\?\.autoUpdater \?\? mod\?\.default\?\.autoUpdater/, '模块解析多级兜底（打包后 ESM→CJS 命名导出可能缺失）'],
+    [/typeof updater\.on !== 'function'/, '解析不到可用对象时及早退出，而不是走到 .on() 才炸'],
+    [/process\.platform === 'linux' && !process\.env\.APPIMAGE/, 'deb 形态只检查不下载（否则抛 ERR_UPDATER_OLD_FILE_NOT_FOUND）'],
+    [/ERR_\(NETWORK\|CONNECTION/, '重试判据看 err.code（message 是本地化的）'],
+    [/const safe = /, '监听器统一包一层：抛错只隔离该事件，不中断事件派发'],
+    [/Promise\.race/, '检查阶段有超时兜底'],
+  ];
+  for (const [re, why] of checks) { if (re.test(main)) ok('客户端：' + why); else bad('main.js', '缺：' + why); }
+} catch (e) { bad('main.js', String(e?.message || e)); }
+
+// ── 3d. 已知差距（明示，不判失败）：差量更新
+//        上游 DESKTOP-AUTO-UPDATE.md §7 第 7 条：没有 .blockmap 时三平台**每次都整包重下**
+//        （exe 76MB / mac zip 93-101MB / AppImage 104MB）。本项目在 CI 里**显式丢弃 blockmap**，
+//        原因是我们这条服务器上行只有 ~50-100KB/s，推送量已经在 300 分钟上限附近；
+//        再带上 blockmap 会让发版本身更容易失败。
+//        这是**知情取舍**，不是遗漏 —— 写在这里，免得后人以为是忘了。
+console.log('\n[3d] 已知差距（明示）');
+{
+  const wf = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'desktop.yml'), 'utf8');
+  if (/rm -f "\$DL"\/\*\.blockmap/.test(wf)) {
+    console.log('  ⚠ 差量更新未启用：CI 丢弃了 *.blockmap → 用户每次更新整包重下（76-104MB）。');
+    console.log('     取舍理由：本站上行 ~50-100KB/s，推送量已近 300 分钟上限。');
+    console.log('     要启用：去掉那行 rm，并把 blockmap 纳入站点与对账口径（上游做法见文档 §4.3）。');
+  } else ok('未丢弃 blockmap（差量更新可用）');
+}
+
 // ── 4. 静默失败扫描（只提示，不判失败：有些是合理的，需要人看一眼）
 console.log('\n[4] 静默失败扫描（提示）');
 const risky = [];

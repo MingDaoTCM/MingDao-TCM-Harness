@@ -74,29 +74,70 @@ async function initAutoUpdate() {
   if (!app.isPackaged) return null;                       // 开发态没有更新元数据
   if (process.env.MINGDAO_TCM_NO_AUTOUPDATE === '1') { console.log('[update] 已禁用（环境变量）'); return null; }
   try {
+    // ⚠ 模块解析要**多级兜底**：打包环境里 ESM 动态导入 CJS 时，命名导出可能缺失。
+    //   上游桌面版就是这么退的（DESKTOP-AUTO-UPDATE.md §6.1，他们的真实报错是 "reading 'once'"）——
+    //   只取 mod.autoUpdater，拿到 undefined 时会一路走到 .on() 才炸，位置离病因很远。
     const mod = await import('electron-updater');
-    updater = mod.autoUpdater;
+    updater = mod?.autoUpdater ?? mod?.default?.autoUpdater ?? mod?.default ?? mod;
+    if (!updater || typeof updater.on !== 'function') {
+      console.warn('[update] electron-updater 模块导出不可用，退回"检查更新"');
+      updater = null;
+      return null;
+    }
   } catch (/** @type {any} */ e) {
     console.warn('[update] electron-updater 不可用，退回"检查更新"：' + (e?.message || e));
+    updater = null;
     return null;
   }
   try {
-    updater.autoDownload = true;
+    // ⚠ deb 形态（Linux 且没有 APPIMAGE 环境变量）**不能自更新**：AppImage 的差量下载
+    //   强依赖 process.env.APPIMAGE，缺了就抛 ERR_UPDATER_OLD_FILE_NOT_FOUND。
+    //   上游的做法是 deb 只检测不下载，然后引导去官网（DESKTOP-AUTO-UPDATE.md §2.2）。
+    const linuxDeb = process.platform === 'linux' && !process.env.APPIMAGE;
+    updater.autoDownload = !linuxDeb;
     updater.autoInstallOnAppQuit = true;
-    updater.on('error', (/** @type {any} */ e) => console.warn('[update] 更新失败（不影响使用）：' + (e?.message || e)));
-    updater.on('update-available', (/** @type {any} */ i) => console.log(`[update] 发现新版本 ${i?.version}，后台下载中…`));
-    updater.on('update-not-available', () => console.log('[update] 已是最新版本'));
-    updater.on('update-downloaded', (/** @type {any} */ i) => {
+    if (linuxDeb) console.log('[update] 检测到 deb 安装形态：只检查不下载，发现新版后引导到下载页');
+    // ⚠ 所有监听器**一律 null-safe 且绝不抛错**。上游踩过的坑：打包环境下 update-available
+    //   的 info 曾是 undefined，旧代码读 info.version 抛 TypeError，**中断了事件派发、
+    //   下载永不开始**（DESKTOP-AUTO-UPDATE.md §2.3）。一个字段就能让整条链路静默死掉。
+    const safe = (/** @type {string} */ tag, /** @type {any} */ fn) => {
+      updater.on(tag, (...args) => { try { fn(...args); } catch (/** @type {any} */ e) { console.warn(`[update] ${tag} 处理异常（已隔离）：` + (e?.message || e)); } });
+    };
+    let updateSeen = false;
+    let downloadRetries = 0;
+    safe('error', (/** @type {any} */ e) => {
+      const code = String(e?.code || '');
+      const msg = String(e?.message || e);
+      console.warn(`[update] 更新失败（不影响使用）：${code} ${msg}`);
+      // ⚠ 重试判据必须同时看 **err.code**：Chromium 的网络错误 message 是**本地化**文案
+      //   （上游就是只匹配英文串，导致"无法连接服务器。"这类中文错误永远不触发重试 ——
+      //   DESKTOP-AUTO-UPDATE.md §7 第 9 条）。
+      const transient = /ERR_(NETWORK|CONNECTION|TIMED?_OUT|INTERNET_DISCONNECTED|NAME_NOT_RESOLVED)/.test(code)
+        || /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(msg);
+      if (transient && updateSeen && downloadRetries < 2) {
+        downloadRetries += 1;
+        console.log(`[update] 网络错误，5s 后自动重试下载（${downloadRetries}/2）`);
+        setTimeout(() => { try { updater.downloadUpdate(); } catch { /* 已隔离 */ } }, 5000);
+      }
+    });
+    safe('update-available', (/** @type {any} */ i) => { updateSeen = true; console.log(`[update] 发现新版本 ${String(i?.version ?? '?')}${linuxDeb ? '（deb 形态：请到下载页更新）' : '，后台下载中…'}`); });
+    safe('update-not-available', () => console.log('[update] 已是最新版本'));
+    safe('download-progress', (/** @type {any} */ p) => console.log(`[update] 下载进度 ${Math.round(Number(p?.percent) || 0)}%`));
+    safe('update-downloaded', (/** @type {any} */ i) => {
       dialog.showMessageBox(win ?? undefined, {
         type: 'info', title: '更新已就绪',
-        message: `新版本 v${i?.version || '?'} 已下载完成`,
+        message: `新版本 v${String(i?.version ?? '?')} 已下载完成`,
         detail: '重启应用即可生效。选择「稍后」则本次退出时自动安装。',
         buttons: ['立即重启并更新', '稍后'], defaultId: 0, cancelId: 1,
       }).then((r) => {
         if (r?.response === 0) { try { updater.quitAndInstall(); } catch (/** @type {any} */ e) { console.warn('[update] 安装失败：' + (e?.message || e)); } }
       }).catch(() => {});
     });
-    await updater.checkForUpdates();
+    // 检查阶段没有 UI 反馈，必须有超时兜底（上游设的是 30 秒）
+    await Promise.race([
+      updater.checkForUpdates(),
+      new Promise((res) => setTimeout(() => { console.log('[update] 检查超时（30s），本次放弃，下次启动再试'); res(null); }, 30000)),
+    ]);
   } catch (/** @type {any} */ e) {
     console.warn('[update] 启动检查失败（不影响使用）：' + (e?.message || e));
   }
