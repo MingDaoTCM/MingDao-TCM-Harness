@@ -88,12 +88,24 @@ try {
   // [正则, 通过时显示的名字, 失败时说明为什么]
   const need = [
     [/NSCameraUsageDescription/, 'mac 段声明了 NSCameraUsageDescription', 'mac 段缺 NSCameraUsageDescription → macOS 摄像头必被系统拒'],
+    [/^[ \t]*entitlements:[ \t]*build\/entitlements\.mac\.plist[ \t]*$/m, 'mac 段指定了 entitlements', 'mac 段没指定 entitlements → hardened runtime 下无 device.camera 授权，macOS 静默给黑帧且不弹授权框'],
     [/!tools\/tcm-ui\/desktop\/dist\/\*\*/, '排除了 desktop/dist/**', '缺 !desktop/dist/** → 打包自我递归（ENAMETOOLONG，四条腿全红）'],
     [/desktop\/node_modules/, '排除了 desktop/node_modules/**', '缺 !desktop/node_modules/** → 产物巨大且可能带进 Electron 本体'],
     [/dify\.mjs|layer\/providers/, '带上了 layer/providers（Dify Provider）', '缺 layer/providers → 产物没有 Dify Provider，问诊不走 Dify'],
     [/kernel\/package\.json/, '带上了 kernel/package.json', '缺 kernel/package.json → 内核版本读成 0.0.0，Pack 被静默跳过'],
   ];
   for (const [re, name, why] of need) { if (re.test(yml)) ok(`electron-builder.yml：${name}`); else bad('electron-builder.yml', why); }
+  // entitlements 文件本身：device.camera 必须在，且 Electron 的四个必需授权不能少
+  try {
+    const pl = fs.readFileSync(path.join(DESKTOP, 'build', 'entitlements.mac.plist'), 'utf8');
+    const keys = ['com.apple.security.device.camera', 'com.apple.security.cs.allow-jit',
+      'com.apple.security.cs.allow-unsigned-executable-memory',
+      'com.apple.security.cs.allow-dyld-environment-variables',
+      'com.apple.security.cs.disable-library-validation'];
+    const miss = keys.filter((k) => !pl.includes(k));
+    if (!miss.length) ok('entitlements.mac.plist：摄像头授权 + Electron 四个必需授权齐全');
+    else bad('entitlements.mac.plist', '缺：' + miss.join(', ') + (miss.includes('com.apple.security.device.camera') ? '（缺摄像头授权 → macOS 黑帧）' : '（缺 Electron 必需授权 → 可能起不来）'));
+  } catch (e) { bad('entitlements.mac.plist', String(e?.message || e)); }
 } catch (e) { bad('electron-builder.yml', String(e?.message || e)); }
 
 // ── 3b. 自动更新链路：站点必须带 zip + 更新元数据

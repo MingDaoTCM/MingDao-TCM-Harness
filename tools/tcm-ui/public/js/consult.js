@@ -400,6 +400,24 @@ export function initConsult() {
       if (!track || track.readyState !== 'live') throw new Error('摄像头轨道未就绪（' + (track?.readyState || '无轨道') + '）');
       const label = track.label || '未知设备';
       startPreview();
+      // 黑帧自检：有些平台在**系统没放行摄像头**时既不弹授权框、也不报错，
+      // 只给一路全黑的帧（macOS 缺 device.camera 授权、Windows 关了"让桌面应用访问相机"
+      // 都是这个表现）。这种情况必须**主动识别并给出该去哪儿开**，
+      // 否则医师看到的就是"一个黑框"，与程序坏了无从区分。
+      setTimeout(() => {
+        const c = $('#camCanvas');
+        if (!c || !c.width) return;
+        let lit = 0;
+        try {
+          const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+          for (let i = 0; i < d.length; i += 4000) { if (d[i] > 12 || d[i + 1] > 12 || d[i + 2] > 12) { lit++; if (lit > 3) break; } }
+        } catch { return; }
+        if (lit <= 3) {
+          tip.textContent = '画面全黑：系统没有放行摄像头。Windows 请到「设置 → 隐私和安全性 → 相机」'
+            + '打开「让桌面应用访问你的相机」；macOS 请到「系统设置 → 隐私与安全性 → 摄像头」允许本应用，'
+            + '并确认没有别的程序（会议/直播软件）占用。也可以直接用「选择图片」。';
+        }
+      }, 2500);
       if (playErr) {
         tip.textContent = '摄像头已打开（' + label + '），但画面未能开始播放：' + (playErr.name || playErr.message || playErr) + ' —— 可改用「选择图片」';
       } else if (!v.videoWidth) {

@@ -1,12 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS 授权（entitlements）—— 问诊台需要访问摄像头拍舌象。
+
+  为什么必须显式给出这个文件：
+  macOS 上要公证就必须开 hardened runtime（强化运行时），而强化运行时**默认禁止**访问摄像头。
+  此时仅有 Info.plist 里的 NSCameraUsageDescription **不够** —— 缺 device.camera 时，
+  系统**既不弹授权框、也不报错**，只是给回一路黑帧。
+  用户实测（Windows 11 与 macOS，真机有摄像头）"点拍照是黑屏、也无授权弹框"正是这个现象。
+
+  前四项是 Electron 在 hardened runtime 下的**必需**授权（少了会崩或加载不了 framework）；
+  最后一项是本项目额外需要的摄像头权限。改这里等于改"能不能启动"，四项务必保留。
+-->
 <plist version="1.0">
-  <dict>
-    <!-- Electron 主进程所需：JIT 与内存页执行（不启用则打包版启动即崩） -->
-    <key>com.apple.security.cs.allow-jit</key><true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
-    <!-- 本应用为本地 WebUI + SSE 网络客户端：允许出站网络（默认即允许，显式声明供审计） -->
-    <key>com.apple.security.network.client</key><true/>
-  </dict>
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- ★ 拍舌象所需：没有它，macOS 静默给黑帧 -->
+  <key>com.apple.security.device.camera</key>
+  <true/>
+</dict>
 </plist>
