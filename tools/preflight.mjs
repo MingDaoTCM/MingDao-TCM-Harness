@@ -27,7 +27,15 @@ const DESKTOP = path.join(REPO, 'tools', 'tcm-ui', 'desktop');
 
 let pass = 0; let fail = 0; const failures = [];
 const ok = (name, extra = '') => { pass++; console.log(`  ✓ ${name}${extra ? '  ' + extra : ''}`); };
-const bad = (name, why) => { fail++; failures.push(`${name}：${why}`); console.log(`  ✗ ${name}\n      ${why}`); };
+const bad = (name, why) => {
+  fail++; failures.push(`${name}：${why}`);
+  console.log(`  ✗ ${name}\n      ${why}`);
+  // 输出 GitHub **注解**：CI 失败时原因会挂在 job 上，API 可直接读到
+  // （/check-runs/<id>/annotations）。为什么需要它：GitHub 的 job 日志下载接口
+  // 时不时返回 BlobNotFound，而"审计为什么失败"只打在 stdout 里 —— 于是 CI 红了却读不到原因，
+  // 只能靠本地猜（本项目 v0.1.26 就连着两轮如此）。注解让原因**跟着 job 一起可查**。
+  if (process.env.CI) console.log(`::error title=preflight ${name}::${String(why).replace(/\n/g, ' ⏎ ').slice(0, 900)}`);
+};
 
 /** 跑一个命令，返回 {code, out} */
 function run(cmd, args, opts = {}) {
