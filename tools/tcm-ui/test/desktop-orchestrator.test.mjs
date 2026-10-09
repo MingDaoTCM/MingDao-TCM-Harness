@@ -412,5 +412,19 @@ await testAsync('★ 检查更新必须真的自动下载：辅助函数要被�
   assert.ok(/立即下载并安装/.test(main), '应提供"立即下载并安装"');
 });
 
+
+await testAsync('★ Linux/deb 不能是更新死路：update-available 必须走站点下载', async () => {
+  const main = fs.readFileSync(path.join(UI_DIR, 'desktop', 'main.js'), 'utf8');
+  const code = main.replace(/^\s*\/\/.*$/gm, '');          // 剥注释再判
+  // electron-updater 在 deb 形态下 autoDownload=false（AppImage 差分下载强依赖 APPIMAGE 变量），
+  // 若只打日志就什么都不发生 —— 用户实测"Windows/macOS 能自动更新，Linux 不能"正是如此。
+  assert.ok(/const linuxDeb = process\.platform === 'linux' && !process\.env\.APPIMAGE/.test(code), '必须识别 deb 形态');
+  assert.ok(/updater\.autoDownload = !linuxDeb/.test(code), 'deb 下应关闭 autoDownload（否则抛 ERR_UPDATER_OLD_FILE_NOT_FOUND）');
+  assert.ok(/if \(linuxDeb\) \{[\s\S]{0,400}installFromSite\(/.test(code), 'deb 发现新版后必须走站点下载，不能只打日志');
+  // 站点兜底只有一处实现，手动路径复用它
+  assert.equal((code.match(/async function installFromSite\(/g) || []).length, 1, 'installFromSite 只应有一处定义');
+  assert.ok(/return installFromSite\(r\.latest, cur\)/.test(code), '手动「检查更新」也应复用同一实现');
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);

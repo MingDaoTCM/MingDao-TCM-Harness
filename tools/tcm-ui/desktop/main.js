@@ -120,7 +120,21 @@ async function initAutoUpdate() {
         setTimeout(() => { try { updater.downloadUpdate(); } catch { /* 已隔离 */ } }, 5000);
       }
     });
-    safe('update-available', (/** @type {any} */ i) => { updateSeen = true; console.log(`[update] 发现新版本 ${String(i?.version ?? '?')}${linuxDeb ? '（deb 形态：请到下载页更新）' : '，后台下载中…'}`); });
+    safe('update-available', (/** @type {any} */ i) => {
+      updateSeen = true;
+      const v = String(i?.version ?? '?');
+      console.log(`[update] 发现新版本 ${v}` + (linuxDeb ? '（deb 形态：走站点下载，electron-updater 不能自更新）' : '，后台下载中…'));
+      // ⚠ deb 形态**不能只打日志**：autoDownload=false，不打这一步就什么都不会发生
+      //   —— 用户实测"Windows/macOS 能更新、Linux 不能"正是此处。
+      if (linuxDeb) {
+        showBox({
+          type: 'info', title: '发现新版本',
+          message: `新版本 v${v}（当前 v${app.getVersion()}）`,
+          detail: '当前是 deb 安装形态，无法后台静默更新。是否现在下载安装包？下载完成后会打开系统安装器。',
+          buttons: ['立即下载', '稍后'], defaultId: 0, cancelId: 1,
+        }).then((r) => { if (r?.response === 0) installFromSite(v, app.getVersion()); }).catch(() => {});
+      }
+    });
     safe('update-not-available', () => console.log('[update] 已是最新版本'));
     safe('download-progress', (/** @type {any} */ p) => console.log(`[update] 下载进度 ${Math.round(Number(p?.percent) || 0)}%`));
     safe('update-downloaded', (/** @type {any} */ i) => {
@@ -194,6 +208,52 @@ function installHint(dest) {
     dest.endsWith('.deb') ? '安装：sudo dpkg -i ' + dest : '赋予执行权限后运行：chmod +x ' + dest}`;
 }
 
+/** 统一的对话框入口（win 可能已销毁 → 一律 catch，绝不让弹窗把流程带崩） */
+const showBox = (/** @type {any} */ opts) => dialog.showMessageBox(win ?? undefined, opts).catch(() => ({}));
+
+/** 站点兜底路径：挑包 → 下载 → 打开安装程序（**只有这一处实现**）。
+ *  两条路都用它：手动「检查更新」发现新版；以及 **Linux/deb** —— electron-updater
+ *  在 deb 形态下 autoDownload=false（AppImage 差分下载强依赖 APPIMAGE 变量），
+ *  所以 `update-available` 之后**什么都不会发生**：用户实测"Windows/macOS 能自动更新、
+ *  Linux 不能"就是这个。deb 走这里下载并打开系统安装器（装 deb 要提权，做不到全静默，
+ *  但"点一下就装"和"自己去网页找"是两回事）。 */
+async function installFromSite(/** @type {string} */ latest, /** @type {string} */ cur) {
+  let name = '';
+  try {
+    const mres = await fetch(`${SITE_URL}/api/downloads`, { cache: 'no-store' });
+    const mj = await mres.json();
+    name = pickArtifact(mj?.files || [], process.platform, process.arch, { appImage: !!process.env.APPIMAGE });
+  } catch (/** @type {any} */ e) { console.warn('[update] 取清单失败：' + (e?.message || e)); }
+  if (!name) {
+    const x = await showBox({
+      type: 'warning', title: '检查更新',
+      message: `站点上找不到适配本机（${process.platform}/${process.arch}）的安装包`,
+      detail: `可以手动打开下载页选择：${SITE_URL}/`,
+      buttons: ['打开下载页', '知道了'], defaultId: 0, cancelId: 1,
+    });
+    if (x?.response === 0) openExternal(`${SITE_URL}/`);
+    return;
+  }
+  try {
+    win?.setProgressBar(0.01);
+    const dest = await downloadInstaller(`${SITE_URL}/downloads/${encodeURIComponent(name)}`, name,
+      (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } });
+    win?.setProgressBar(-1);
+    await showBox({ type: 'info', title: '更新已下载', message: `v${latest} 已下载完成`, detail: installHint(dest) });
+    const err = await shell.openPath(dest);
+    if (err) { console.warn('[update] 打开安装包失败：' + err); openExternal(`${SITE_URL}/`); }
+  } catch (/** @type {any} */ e) {
+    win?.setProgressBar(-1);
+    console.warn('[update] 下载失败：' + (e?.message || e));
+    const x = await showBox({
+      type: 'warning', title: '检查更新', message: '下载失败',
+      detail: `原因：${e?.message || e}\n也可以手动打开下载页：${SITE_URL}/`,
+      buttons: ['打开下载页', '知道了'], defaultId: 0, cancelId: 1,
+    });
+    if (x?.response === 0) openExternal(`${SITE_URL}/`);
+  }
+}
+
 /**
  * 「检查更新」。逻辑在 orchestrator 的 `checkForUpdate`（纯 Node，有单测）；
  * 这里只负责弹窗 —— 三条硬要求照上游桌面版踩过的坑写：
@@ -231,6 +291,7 @@ async function checkUpdates() {
       buttons: ['立即下载并安装', '稍后'], defaultId: 0, cancelId: 1,
     });
     if (pick?.response !== 0) return;
+    return installFromSite(r.latest, cur);
 
     // 按本机平台/架构从站点清单里挑对应的安装包
     let name = '';
