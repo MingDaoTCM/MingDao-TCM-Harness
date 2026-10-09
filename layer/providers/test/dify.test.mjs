@@ -457,5 +457,17 @@ await testAsync('★ Dify 报错（HTTP 5xx）→ 同样自动兜底，不把错
 });
 
 fs.rmSync(HOME, { recursive: true, force: true });
+
+// ★ 用户实测：舌象照片被拦「当前模型不支持图片输入」，而 Dify Chatflow 本来就是视觉的。
+//   内核在**附件构造阶段**就按模型能力门控图片，判据之一是「自定义 Provider 模块的静态导出
+//   supportsVision / capabilities.vision」（内核 src/providers/index.js 的 resolveVisionSupport，
+//   v0.6.3 专为下游自定义 Provider 加的）。缺了它 → 界面直接拦住图片 ✗
+//   —— 而能力是真的、provider 也确实会把 files 发过去：**能力是真的，只是没声明**。
+await testAsync('★ Provider 必须声明 supportsVision，否则内核会把舌象照片拦在附件阶段', async () => {
+  const mod = await import('../dify.mjs');
+  const declared = mod.supportsVision === true || mod.capabilities?.vision === true;
+  assert.ok(declared, '本 Provider 支持 Dify 视觉输入，必须静态声明 supportsVision=true（或 capabilities.vision=true）');
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);
