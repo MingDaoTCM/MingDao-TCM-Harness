@@ -72,11 +72,16 @@
   .warn{color:var(--yellow)}
   code{background:var(--code);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:12.5px;color:var(--cyan)}
 
-  /* 站点统计条（抄上游官网的呈现：一行三项、数字加粗；拿不到数据时整块隐藏） */
-  .statsbar{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;margin:14px 0 0;
-    font-size:13px;color:#98a2b8}
-  .statsbar b{color:#e8ecf4;font-size:15px;margin-left:4px}
-  .statsbar[hidden]{display:none !important}
+  /* ── 站点统计：**位置与样式完全照抄上游官网**（hero 下方一块 .stats-live 卡片组，
+     顶边用 ::before 挂一行小字标签）。上游用 --green，本站对应变量叫 --jade，其余同名。 */
+  .stats{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-top:36px}
+  .stats-live{margin-top:30px;padding-top:26px;border-top:1px solid var(--border);position:relative}
+  .stats-live::before{content:'本站访问统计 · 每 5 分钟更新';position:absolute;top:-9px;left:50%;transform:translateX(-50%);background:var(--bg);padding:0 14px;font-size:11.5px;color:var(--faint);letter-spacing:1px;white-space:nowrap}
+  .stat{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 22px;min-width:150px}
+  .stat b{display:block;font-size:24px;color:var(--jade);font-variant-numeric:tabular-nums}
+  .stat span{font-size:12.5px;color:var(--dim)}
+  .dlc{display:none;margin-top:8px;font-size:12.5px;color:var(--faint)}
+
 </style>
 </head>
 <body>
@@ -89,14 +94,6 @@
     <a href="/help.html">使用帮助</a>
     <a href="/forum/">社区论坛</a>
 
-  <!-- 站点统计（抄上游官网口径：累计访问 / 累计下载 / 今日下载）。
-       数据由宿主 cron 每 5 分钟从访问日志聚合；拿不到就整块隐藏，不显示 0
-       —— 显示 0 会被误读成"真的没人来"。 -->
-  <div id="statsBar" class="statsbar" hidden>
-    <span>累计访问 <b id="stPv">—</b></span>
-    <span>累计下载 <b id="stDl">—</b></span>
-    <span>今日下载 <b id="stDlToday">—</b></span>
-  </div>
     <a href="https://harness.mingdao.ai/" target="_blank" rel="noopener">内核官网 ↗</a>
     <a href="#ability">能力</a>
     <a href="#compliance">合规</a>
@@ -124,6 +121,15 @@
     <span class="pill">回访看板与超期预警</span>
     <span class="pill">审计与费用归因</span>
   </div>
+      <!-- 站点统计：位置与样式**完全照抄上游官网**（hero 下方一块卡片组，
+           顶边挂一行小字标签）。数据来自 /api/stats（宿主 cron 每 5 分钟聚合访问日志）。
+           拿不到就整块隐藏 —— 显示 0 会被误读成"真的没人来"。 -->
+      <div class="stats stats-live" id="statsLive" hidden>
+        <div class="stat"><b id="statHome">—</b><span>首页访问 · 今日 <b id="statHomeToday">—</b></span></div>
+        <div class="stat"><b id="statHelp">—</b><span>使用帮助 · 今日 <b id="statHelpToday">—</b></span></div>
+        <div class="stat"><b id="statForum">—</b><span>社区论坛 · 今日 <b id="statForumToday">—</b></span></div>
+        <div class="stat"><b id="statUv">—</b><span>访客累计（独立 IP）· 今日 <b id="statUvToday">—</b></span></div>
+      </div>
 </div></section>
 
 <section id="downloads" class="alt"><div class="wrap">
@@ -218,26 +224,56 @@ function card(g, files) {
   ).join('');
   const shas = files.map((f) => f.sha256
     ? `<p class="note">sha256 <code>${f.sha256}</code></p>` : '').join('');
-  return `<div class="dl"><div class="hd"><div class="ic">${g.ic}</div>
+  // 文件族口径必须与统计脚本一致（抹掉版本段）：mingdao-tcm-setup-0.1.27-x64.exe → mingdao-tcm-setup-x64.exe
+  // 否则卡片上显示的下载次数会与 stats.json 对不上。
+  const fams = files.map((f) => String(f.name).replace(/-\d+\.\d+\.\d+/g, '')).join(',');
+  return `<div class="dl" data-families="${fams}"><div class="hd"><div class="ic">${g.ic}</div>
       <div><b>${g.title}</b><span>${g.sub}</span></div></div>
-      ${btns}<p class="note">${g.note}</p>${shas}</div>`;
+      ${btns}<p class="note">${g.note}</p>${shas}<div class="dlc"></div></div>`;
 }
 
-// 站点统计：/api/stats → 累计访问 / 累计下载 / 今日下载
-(async () => {
-  const bar = document.getElementById('statsBar');
-  if (!bar) return;
-  try {
-    const r = await fetch('/api/stats', { cache: 'no-store' });
-    const j = await r.json();
-    if (!j || !j.ok) return;                       // 拿不到就保持隐藏
-    const dlTotal = Object.values(j.downloads || {}).reduce((a, x) => a + (x.total || 0), 0);
-    const dlToday = Object.values(j.downloads || {}).reduce((a, x) => a + (x.today || 0), 0);
-    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = Number(v).toLocaleString('zh-CN'); };
-    set('stPv', j.pvTotal || 0); set('stDl', dlTotal); set('stDlToday', dlToday);
-    bar.hidden = false;
-  } catch { /* 统计拿不到不影响其它内容 */ }
-})();
+
+// 站点统计：与上游官网同一套做法 —— 读 /api/stats，格式化后填入 hero 下方卡片组；
+// 下载次数按**平台卡片**显示（上游的 .dlc 也是这个位置）。失败静默隐藏，不显示 0。
+// ⚠ 卡片上的下载次数**不能只在 stats 到达时填**：下载卡片是 JS 渲染的，
+//   两个 fetch 并发 → stats 先回来时 #dlGrid 还是空的，卡片计数会永远空着 ✗
+//   （上游的 .dlc 是静态 HTML，没有这个竞态；本层是动态渲染，必须两边都触发一次填充。）
+let statCache = null;
+function fillDlcCounts() {
+  if (!statCache) return;
+  const dl = statCache.downloads || {};
+  const fmt = (n) => (n >= 10000 ? (n / 10000).toFixed(1) + ' 万' : String(n));
+  document.querySelectorAll('#dlGrid .dl').forEach((card) => {
+    const el = card.querySelector('.dlc');
+    const files = (card.dataset.families || '').split(',').filter(Boolean);
+    if (!el || !files.length) return;
+    const tot = files.reduce((a, f) => a + ((dl[f] || {}).total || 0), 0);
+    const tod = files.reduce((a, f) => a + ((dl[f] || {}).today || 0), 0);
+    el.textContent = '已下载 ' + fmt(tot) + ' 次 · 今日 ' + fmt(tod) + ' 次';
+    el.style.display = 'block';
+  });
+}
+
+fetch('/api/stats?t=' + Date.now())
+  .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+  .then((st) => {
+    if (!st || !st.ok) return;
+    const fmt = (n) => (n >= 10000 ? (n / 10000).toFixed(1) + ' 万' : String(n));
+    const pages = st.pages || {};
+    const setStat = (id, todayId, sec) => {
+      const el = document.getElementById(id); if (el) el.textContent = fmt((pages[sec] || {}).total ?? 0);
+      const te = document.getElementById(todayId); if (te) te.textContent = fmt((pages[sec] || {}).today ?? 0);
+    };
+    setStat('statHome', 'statHomeToday', 'home');
+    setStat('statHelp', 'statHelpToday', 'help');
+    setStat('statForum', 'statForumToday', 'forum');
+    const uv = document.getElementById('statUv'); if (uv) uv.textContent = fmt((st.uv || {}).total ?? 0);
+    const uvT = document.getElementById('statUvToday'); if (uvT) uvT.textContent = fmt((st.uv || {}).today ?? 0);
+    const box = document.getElementById('statsLive'); if (box) box.hidden = false;
+    statCache = st;
+    fillDlcCounts();
+  })
+  .catch(() => { /* 统计拿不到不影响其它内容 */ });
 
 // 版本动态：服务端在发版时写入 versions.json（/api/versions）——页面只负责渲染
 (async () => {
@@ -274,6 +310,7 @@ function card(g, files) {
       .filter((x) => x.files.length)
       .map((x) => card(x.g, x.files))
       .join('') || '<div class="empty">清单里没有可识别的安装包。</div>';
+      fillDlcCounts();   // 卡片刚渲染 → 若 stats 已到就补上（见上文竞态说明）
   } catch (e) {
     grid.innerHTML = '<div class="empty">读取安装包清单失败：' + (e?.message || e) + '</div>';
   }
