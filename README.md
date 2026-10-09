@@ -82,11 +82,13 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 
 ## 与上游的版本关系
 
-- 本层当前对齐 **MingDao-Harness v0.6.12**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
+- 本层当前对齐 **MingDao-Harness v0.6.13**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
   > 这个版本号不是装饰：`tools/doc-lint.mjs` 的 INV-6 会拿它跟**实际内核版本**比，
   > 落后了就红 —— 提醒你「自那以后本层没有重新验证过」。内核升版本后跑一遍 `npm test` 再改这个数。
-  > （2026-10-09 就是这么发现的：内核已到 v0.6.12，README 还写 0.6.10，门禁当场变红。）
-- 已在 v0.6.12 内核下验证全部 11 档门禁（`npm test`，清单唯一定义处 `tools/gates.mjs`）：
+  > （2026-10-09 就是这么发现的：当天先是内核到 v0.6.12、README 还写 0.6.10，门禁变红；
+  > 同一小时内上游又发了 v0.6.13，门禁再次变红 —— 同一天抓到两次落后。
+  > 这条门禁的价值就在这：内核往前走而本层没跟，**只有它会说话**。）
+- 已在 v0.6.13 内核下验证全部 11 档门禁（`npm test`，清单唯一定义处 `tools/gates.mjs`）：
   `pack verify`（静态）、`doc-lint`（8 条文档不变量）、`kernel-sentinel`（Pack 真的挂载）、
   `pack.test.mjs`（55 项）、`integration.test.mjs`（11 项）、`dify.test.mjs`（21 项）、
   `tcm-data`（14 项）、`settings`（8 项）、`ui-wiring`（8 项）、
