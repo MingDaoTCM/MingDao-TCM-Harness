@@ -339,7 +339,6 @@ function card(g, files) {
       .filter((x) => x.files.length)
       .map((x) => card(x.g, x.files))
       .join('') || '<div class="empty">清单里没有可识别的安装包。</div>';
-      fillDlcCounts();   // 卡片刚渲染 → 若 stats 已到就补上（见上文竞态说明）
   } catch (e) {
     grid.innerHTML = '<div class="empty">读取安装包清单失败：' + (e?.message || e) + '</div>';
   }

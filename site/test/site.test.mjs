@@ -440,5 +440,42 @@ await testAsync('★ 首页 CSS 注释必须配平 + 统计四规则成套（注
   assert.match(style, /\.stat\{[^}]*text-align:center/, '.stat 必须显式 text-align:center');
 });
 
+
+await testAsync('★ 首页内联 JS：不得调用未定义的函数（删函数忘删调用 → 整块功能运行时炸）', async () => {
+  // 实测事故：删除 fillDlcCounts() 时漏掉一处调用 → 下载区整块渲染成
+  // "读取安装包清单失败：fillDlcCounts is not defined" ✗（用户当场看到）。
+  // 静态语法检查抓不到（JS 语法合法），只有**跑起来**才炸 —— 所以这里做一次轻量静态分析：
+  // 抽出所有"裸调用"的函数名，逐个确认它在本文件里定义过、或是已知的全局。
+  const html = fs.readFileSync(path.join(SITE, 'public', 'index.html'), 'utf8');
+  const raw = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
+  assert.ok(raw.length > 500, '应能抽到内联 JS');
+  // ⚠ 必须先剥掉**注释 / 字符串 / 正则字面量**再找调用，否则正则里的 `tcm(`、
+  //   字符串里的 `var(` 都会被当成"未定义的调用"→ 好文件上也红（这条断言第一版就栽在这）。
+  //   正则与除号的区分用经典启发式：`/` 前面是这些字符（或行首）时按正则处理。
+  const scripts = raw
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')          // 块注释
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')         // 行注释（避开 http://）
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")        // 单引号字符串
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')        // 双引号字符串
+    .replace(/(^|[=(,:;[!&|?{}+\-*%<>~])\s*\/(?:[^/\\\n[]|\\.|\[[^\]]*\])+\/[gimsuy]*/g, '$1 ');
+  // 本文件里"定义过"的名字：function 声明 / const|let|var 赋值 / 函数参数与解构
+  const defined = new Set();
+  for (const m of scripts.matchAll(/function\s+([A-Za-z_$][\w$]*)/g)) defined.add(m[1]);
+  for (const m of scripts.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) defined.add(m[1]);
+  for (const m of scripts.matchAll(/(?:const|let|var)\s*\{([^}]*)\}/g)) for (const n of m[1].split(',')) defined.add(n.trim().split(':').pop().trim());
+  for (const m of scripts.matchAll(/\(([^)]*)\)\s*=>/g)) for (const n of m[1].split(',')) { const t = n.trim().replace(/[={}].*$/, '').trim(); if (/^[A-Za-z_$][\w$]*$/.test(t)) defined.add(t); }
+  for (const m of scripts.matchAll(/([A-Za-z_$][\w$]*)\s*[:=]\s*(?:async\s*)?\(/g)) defined.add(m[1]);   // 对象方法 / 赋值的函数
+  const GLOBALS = new Set(['fetch','document','window','console','setTimeout','clearTimeout','setInterval','clearInterval',
+    'requestAnimationFrame','cancelAnimationFrame','Math','Object','Array','JSON','String','Number','Boolean','Promise','Date',
+    'RegExp','Error','TypeError','Set','Map','WeakMap','URL','URLSearchParams','Blob','FileReader','Image','Node','Intl',
+    'encodeURIComponent','decodeURIComponent','parseInt','parseFloat','isNaN','isFinite','alert','prompt','confirm',
+    'localStorage','sessionStorage','navigator','location','history','queueMicrotask','structuredClone','if','for','while','switch','catch','return','typeof','function','new','await','async','super','import','require']);
+  const calls = new Set();
+  // 只取"裸调用"：前面不是 . 或标识符字符（排除 obj.method(...) 与 属性名）
+  for (const m of scripts.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) calls.add(m[1]);
+  const missing = [...calls].filter((n) => !defined.has(n) && !GLOBALS.has(n)).sort();
+  assert.deepEqual(missing, [], '首页内联 JS 调用了未定义的函数（删函数时漏删调用？）：' + missing.join(', '));
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);
