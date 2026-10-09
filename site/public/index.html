@@ -80,6 +80,8 @@
   .stat{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 24px;min-width:160px;text-align:center}
   .stat b{display:block;font-size:24px;color:var(--jade);font-variant-numeric:tabular-nums}
   .stat span{font-size:12.5px;color:var(--dim)}
+  /* 平台卡片上的下载次数（与上游官网同位置同写法） */
+  .dlc{display:none;margin-top:10px;font-size:12.5px;color:var(--faint)}
 
   /* ── 版本动态：**结构和样式抄上游官网**（原生 details，零 JS；复用既有配色变量）── */
   .versions-more{margin-top:14px}
@@ -261,7 +263,7 @@ function card(g, files) {
   const fams = files.map((f) => String(f.name).replace(/-\d+\.\d+\.\d+/g, '')).join(',');
   return `<div class="dl" data-families="${fams}"><div class="hd"><div class="ic">${g.ic}</div>
       <div><b>${g.title}</b><span>${g.sub}</span></div></div>
-      ${btns}<p class="note">${g.note}</p>${shas}</div>`;
+      ${btns}<p class="note">${g.note}</p>${shas}<div class="dlc"></div></div>`;
 }
 
 
@@ -282,9 +284,30 @@ function card(g, files) {
     set('statUv', (st.uv || {}).total || 0);
     const box = document.getElementById('statsLive');
     if (box) box.hidden = false;
+    cardStats = st;
+    fillCardDownloadCounts();
   } catch { /* 统计拿不到不影响其它内容 */ }
 })();
 
+
+// 平台卡片上的下载次数（与上游官网一致：放在**下载卡片**里）。
+// ⚠ 两处都要触发填充：下载卡片是 JS 渲染的，两个 fetch 并发 → stats 先到时 #dlGrid 还空着，
+//   只填一次会永远空着（上游的 .dlc 是静态 HTML，没有这个竞态）。
+let cardStats = null;
+function fillCardDownloadCounts() {
+  if (!cardStats) return;
+  const dl = cardStats.downloads || {};
+  const fmt = (n) => (Number(n) >= 10000 ? (Number(n) / 10000).toFixed(1) + ' 万' : String(n));
+  document.querySelectorAll('#dlGrid .dl').forEach((card) => {
+    const el = card.querySelector('.dlc');
+    const fams = (card.dataset.families || '').split(',').filter(Boolean);
+    if (!el || !fams.length) return;
+    const tot = fams.reduce((a, f) => a + ((dl[f] || {}).total || 0), 0);
+    const today = fams.reduce((a, f) => a + ((dl[f] || {}).today || 0), 0);
+    el.textContent = '已下载 ' + fmt(tot) + ' 次 · 今日 ' + fmt(today) + ' 次';
+    el.style.display = 'block';
+  });
+}
 
 // 版本动态：最新一版直接展示「本版增加了什么/变了什么」，其余用原生 details 收起
 // （结构与样式抄上游官网；说明由发布流程从**提交记录**生成，不是手写静态文案）。
@@ -339,6 +362,7 @@ function card(g, files) {
       .filter((x) => x.files.length)
       .map((x) => card(x.g, x.files))
       .join('') || '<div class="empty">清单里没有可识别的安装包。</div>';
+      fillCardDownloadCounts();   // 卡片刚渲染 → 若 stats 已到就补上（竞态两边都触发）
   } catch (e) {
     grid.innerHTML = '<div class="empty">读取安装包清单失败：' + (e?.message || e) + '</div>';
   }
