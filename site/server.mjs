@@ -436,6 +436,17 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, versions: m.version ? [{ version: m.version, at: m.generatedAt }] : [] });
     }
   }
+  // 站点统计（由宿主 cron 每 5 分钟生成 stats.json；抄上游口径）
+  if (p === '/api/stats') {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'stats.json'), 'utf8'));
+      return sendJson(res, 200, { ok: true, ...j });
+    } catch {
+      // 还没生成过就老实说"暂无"，不要让前端显示 0（那会被当成"真的没人访问"）
+      return sendJson(res, 200, { ok: false, error: '统计尚未生成' });
+    }
+  }
+
   if (p === '/api/latest') {
     const m = downloadManifest();
     return sendJson(res, 200, { ok: true, version: m.version || '', generatedAt: m.generatedAt || '' });

@@ -71,6 +71,12 @@
   footer .sp{flex:1}
   .warn{color:var(--yellow)}
   code{background:var(--code);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:12.5px;color:var(--cyan)}
+
+  /* 站点统计条（抄上游官网的呈现：一行三项、数字加粗；拿不到数据时整块隐藏） */
+  .statsbar{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;margin:14px 0 0;
+    font-size:13px;color:#98a2b8}
+  .statsbar b{color:#e8ecf4;font-size:15px;margin-left:4px}
+  .statsbar[hidden]{display:none !important}
 </style>
 </head>
 <body>
@@ -82,6 +88,15 @@
     <a href="#downloads">下载</a>
     <a href="/help.html">使用帮助</a>
     <a href="/forum/">社区论坛</a>
+
+  <!-- 站点统计（抄上游官网口径：累计访问 / 累计下载 / 今日下载）。
+       数据由宿主 cron 每 5 分钟从访问日志聚合；拿不到就整块隐藏，不显示 0
+       —— 显示 0 会被误读成"真的没人来"。 -->
+  <div id="statsBar" class="statsbar" hidden>
+    <span>累计访问 <b id="stPv">—</b></span>
+    <span>累计下载 <b id="stDl">—</b></span>
+    <span>今日下载 <b id="stDlToday">—</b></span>
+  </div>
     <a href="https://harness.mingdao.ai/" target="_blank" rel="noopener">内核官网 ↗</a>
     <a href="#ability">能力</a>
     <a href="#compliance">合规</a>
@@ -207,6 +222,22 @@ function card(g, files) {
       <div><b>${g.title}</b><span>${g.sub}</span></div></div>
       ${btns}<p class="note">${g.note}</p>${shas}</div>`;
 }
+
+// 站点统计：/api/stats → 累计访问 / 累计下载 / 今日下载
+(async () => {
+  const bar = document.getElementById('statsBar');
+  if (!bar) return;
+  try {
+    const r = await fetch('/api/stats', { cache: 'no-store' });
+    const j = await r.json();
+    if (!j || !j.ok) return;                       // 拿不到就保持隐藏
+    const dlTotal = Object.values(j.downloads || {}).reduce((a, x) => a + (x.total || 0), 0);
+    const dlToday = Object.values(j.downloads || {}).reduce((a, x) => a + (x.today || 0), 0);
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = Number(v).toLocaleString('zh-CN'); };
+    set('stPv', j.pvTotal || 0); set('stDl', dlTotal); set('stDlToday', dlToday);
+    bar.hidden = false;
+  } catch { /* 统计拿不到不影响其它内容 */ }
+})();
 
 // 版本动态：服务端在发版时写入 versions.json（/api/versions）——页面只负责渲染
 (async () => {
