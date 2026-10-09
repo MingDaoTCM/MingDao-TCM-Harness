@@ -82,6 +82,31 @@
   .stat span{font-size:12.5px;color:var(--dim)}
   .dlc{display:none;margin-top:8px;font-size:12.5px;color:var(--faint)}
 
+  /* ── 版本动态：**结构和样式抄上游官网**（原生 details，零 JS；复用既有配色变量）── */
+  .versions-more{margin-top:14px}
+  .versions-more>summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:center;gap:10px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:11px 20px;font-size:14.5px;color:var(--cyan);user-select:none;transition:border-color .2s,color .2s,background .2s}
+  .versions-more>summary::-webkit-details-marker{display:none}
+  .versions-more>summary::before{content:'▾';color:var(--faint);font-size:12px;line-height:1;transition:transform .2s}
+  .versions-more[open]>summary::before{transform:rotate(180deg)}
+  .versions-more>summary:hover{border-color:var(--cyan);color:var(--text);background:var(--bg3)}
+  .versions-more>summary:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  .versions-more .s-close{display:none}
+  .versions-more[open] .s-open{display:none}
+  .versions-more[open] .s-close{display:inline}
+  .versions-more[open]>summary{margin-bottom:6px}
+  .verlatest{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-top:8px}
+  .verlatest .vh{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .verlatest .vh b{color:var(--jade);font-size:16px}
+  .verlatest .vh span{color:var(--faint);font-size:12.5px}
+  .verlatest ul{margin:10px 0 0;padding-left:20px}
+  .verlatest li{color:var(--dim);font-size:13.5px;margin:5px 0}
+  .ver2{width:100%;border-collapse:collapse;font-size:14.5px;margin:6px 0 0}
+  .ver2 th{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);color:var(--cyan);font-weight:400;font-size:13px}
+  .ver2 td{padding:12px;border-bottom:1px solid var(--border);vertical-align:top;color:var(--dim)}
+  .ver2 td.vv{white-space:nowrap}
+  .ver2 ul{margin:0;padding-left:18px}
+  .ver2 li{margin:4px 0}
+
 </style>
 </head>
 <body>
@@ -121,11 +146,6 @@
     <span class="pill">回访看板与超期预警</span>
     <span class="pill">审计与费用归因</span>
   </div>
-      <!-- 站点统计：位置与样式**完全照抄上游官网**（hero 下方一块卡片组，
-           顶边挂一行小字标签）。数据来自 /api/stats（宿主 cron 每 5 分钟聚合访问日志）。
-           拿不到就整块隐藏 —— 显示 0 会被误读成"真的没人来"。 -->
-      <div class="stats stats-live" id="statsLive" hidden>
-        <div class="stat"><b id="statHome">—</b><span>首页访问 · 今日 <b id="statHomeToday">—</b></span></div>
         <div class="stat"><b id="statHelp">—</b><span>使用帮助 · 今日 <b id="statHelpToday">—</b></span></div>
         <div class="stat"><b id="statForum">—</b><span>社区论坛 · 今日 <b id="statForumToday">—</b></span></div>
         <div class="stat"><b id="statUv">—</b><span>访客累计（独立 IP）· 今日 <b id="statUvToday">—</b></span></div>
@@ -191,11 +211,23 @@
   <h2><span class="dot">●</span> 版本动态</h2>
   <p class="sec-sub">桌面版与垂域层一起发版；内核（MingDao-Harness）版本单独跟随上游。
     下表由发布流程在发版时写入，<b>不是手写的静态文案</b>。</p>
-  <table class="ver">
-    <thead><tr><th>版本</th><th>发布时间</th></tr></thead>
-    <tbody id="verBody"><tr><td colspan="2" class="dim">正在读取版本动态…</td></tr></tbody>
-  </table>
+      <!-- 最新一版直接展示，其余用原生 <details> 收起（**结构和样式抄上游官网**：
+           零 JS 折叠、summary 里 .s-open/.s-close 切换、▾ 旋转）。 -->
+      <div id="verLatest" class="verlatest"><div class="dim">正在读取版本动态…</div></div>
+      <details class="versions-more" id="verMore" hidden>
+        <summary><span class="s-open" id="verMoreLabel">展开全部版本</span><span class="s-close">收起全部版本</span></summary>
+        <table class="ver2">
+          <thead><tr><th style="width:150px">版本</th><th>本版增加了什么 / 变了什么</th></tr></thead>
+          <tbody id="verBody"></tbody>
+        </table>
+      </details>
 </div></section>
+
+      <!-- 站点统计：位置与样式**完全照抄上游官网**（hero 下方一块卡片组，
+           顶边挂一行小字标签）。数据来自 /api/stats（宿主 cron 每 5 分钟聚合访问日志）。
+           拿不到就整块隐藏 —— 显示 0 会被误读成"真的没人来"。 -->
+      <div class="stats stats-live" id="statsLive" hidden>
+        <div class="stat"><b id="statHome">—</b><span>首页访问 · 今日 <b id="statHomeToday">—</b></span></div>
 
 <footer><div class="wrap">
   <span>© 2026 明道中医 · 明道中医问诊台（桌面版下载）</span>
@@ -275,20 +307,38 @@ fetch('/api/stats?t=' + Date.now())
   })
   .catch(() => { /* 统计拿不到不影响其它内容 */ });
 
-// 版本动态：服务端在发版时写入 versions.json（/api/versions）——页面只负责渲染
+// 版本动态：最新一版直接展示「本版增加了什么/变了什么」，其余用原生 details 收起
+// （结构与样式抄上游官网；说明由发布流程从**提交记录**生成，不是手写静态文案）。
 (async () => {
-  const body = $('#verBody');
-  if (!body) return;
+  const latest = document.getElementById('verLatest');
+  const more = document.getElementById('verMore');
+  if (!latest) return;
+  const esc = (t) => String(t || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const day = (t) => String(t || '').slice(0, 10);
+  const list = (notes) => notes && notes.length
+    ? '<ul>' + notes.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>'
+    : '<div class="dim" style="margin-top:8px;font-size:13px">（本版没有可展示的条目）</div>';
   try {
     const r = await fetch('/api/versions', { cache: 'no-store' });
     const j = await r.json();
     const vs = (j && j.versions) || [];
-    body.innerHTML = vs.length
-      ? vs.map((v) => '<tr><td class="v">v' + String(v.version || '').replace(/^v/, '')
-          + '</td><td>' + String(v.at || '').slice(0, 10) + '</td></tr>').join('')
-      : '<tr><td colspan="2" class="dim">暂无发版记录</td></tr>';
+    if (!vs.length) { latest.innerHTML = '<div class="dim">暂无发版记录</div>'; return; }
+    const v0 = vs[0];
+    latest.innerHTML = '<div class="vh"><b>v' + esc(v0.version) + '</b><span>' + esc(day(v0.at)) + ' · 最新版</span></div>' + list(v0.notes);
+    const rest = vs.slice(1);
+    if (!rest.length) return;
+    const body = document.getElementById('verBody');
+    if (body) {
+      body.innerHTML = rest.map((v) => '<tr><td class="vv"><b style="color:var(--text)">v' + esc(v.version)
+        + '</b><br><span style="font-size:12.5px;color:var(--faint)">' + esc(day(v.at)) + '</span></td><td>'
+        + (v.notes && v.notes.length ? '<ul>' + v.notes.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>'
+           : '<span class="dim">（无条目）</span>') + '</td></tr>').join('');
+    }
+    const lab = document.getElementById('verMoreLabel');
+    if (lab) lab.textContent = '展开全部版本（' + (rest.length + 1) + '）';
+    if (more) more.hidden = false;
   } catch (e) {
-    body.innerHTML = '<tr><td colspan="2" class="dim">读取版本动态失败</td></tr>';
+    latest.innerHTML = '<div class="dim">读取版本动态失败</div>';
   }
 })();
 
