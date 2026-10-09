@@ -6,7 +6,7 @@
   "engines": {
     "mingdao": ">=0.5 <0.7"
   },
-  "description": "中医问诊：十问采集 / 病历号患者系统 / 复诊四态对比 / 回访追踪。只做采集与病历起草，不输出诊疗结论。",
+  "description": "中医问诊：门诊病历采集（主诉+现病史必填，其余可选）/ 病历号患者系统 / 复诊四态对比 / 回访追踪。只做采集与病历起草，不输出诊疗结论。",
   "author": "MingDaoTCM",
   "license": "private",
   "permissions": {

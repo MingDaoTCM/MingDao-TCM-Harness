@@ -1,0 +1,17 @@
+{
+  "name": "mingdao-tcm-harness",
+  "version": "0.2.0",
+  "description": "明道中医 Harness —— 中医垂域层（下游 Line B），依赖上游内核 MingDao-Harness",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tools/run-gates.mjs",
+    "test:docs": "node tools/doc-lint.mjs",
+    "test:sentinel": "node tools/kernel-sentinel.mjs",
+    "preflight": "node tools/preflight.mjs"
+  }
+}

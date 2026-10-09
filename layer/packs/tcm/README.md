@@ -25,7 +25,7 @@ layer/packs/tcm/
   pack.json              # manifest：apiVersion / engines / permissions / contributes
   pack.mjs               # createPack(ctx) → tools / constraints / promptSections
   prompts/domain.md      # 中医领域提示词段（内核按 order + pack/id 确定性排序，字节稳定 → 不破坏前缀缓存）
-  test/pack.test.mjs        # 50 项：契约 / 字段契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
+  test/pack.test.mjs        # 55 项：契约 / 字段契约 / 红线阻断（真引擎）/ 工具功能 / 错误路径
   test/integration.test.mjs # 11 项：真实 agent 循环 + 提示词注入 + 入账 + 输出红线
   README.md                 # 本文件
 ```
@@ -53,13 +53,16 @@ layer/packs/tcm/
 
 ## 三、能力面
 
-### 工具（4 个，内核注册名自动加前缀）
+### 工具（5 个，内核注册名自动加前缀）
+
+> 计数写 **5**：这是 `pack.mjs` 里 `tools[]` 的真实长度，
+> `tools/doc-lint.mjs` 的 INV-1 会拿它跟代码比对 —— 加/删工具后忘了改这里会当场红。
 
 | 工具 | 注册名 | 读/写 | 职责 |
 |---|---|---|---|
 | `patient_lookup` | `pack__tcm__patient_lookup` | 只读 | 按病历号 / 姓名+出生年+性别 定位患者；**同名多命中返回候选列表，绝不静默挑一个** |
 | `patient_register` | `pack__tcm__patient_register` | **写** | 登记新患者并分配病历号；**同名已存在时拒绝登记**，把候选交回医师 |
-| `intake_collect` | `pack__tcm__intake_collect` | **写** | 十问结构化 + 病历落盘；**必填齐全才写**，缺项回报"请继续采集" |
+| `intake_collect` | `pack__tcm__intake_collect` | **写** | 门诊病历结构化 + 病历落盘；**必填齐全才写**，缺项回报"请继续采集" |
 | `visit_compare` | `pack__tcm__visit_compare` | 只读 | 复诊四态对比（消失/减轻/无变化/加重），只陈述事实 |
 | `followup_board` | `pack__tcm__followup_board` | 只读 | 回访看板 / 单患者时间线趋势 + 异常预警 + 随访话术草稿 |
 
@@ -296,7 +299,7 @@ Provider 再从中取回、拼进 Dify 的 query（否则会重演「四诊标�
 # ① 静态校验（下游 CI 门禁，应退出 0）
 mingdao pack verify layer/packs/tcm
 
-# ② 单元 + 红线 + 功能 + 错误路径测试（50 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
+# ② 单元 + 红线 + 功能 + 错误路径测试（55 项；需要一份上游内核检出，红线部分用它的真实约束引擎）
 MINGDAO_KERNEL=/path/to/MingDao-Harness node layer/packs/tcm/test/pack.test.mjs
 
 # ③ 端到端集成测试（11 项；真实 agent 循环 + 提示词注入 + 输出红线）

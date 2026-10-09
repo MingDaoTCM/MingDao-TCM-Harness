@@ -1,0 +1,73 @@
+# 内核版本哨兵 —— 每周把下游门禁对着**上游内核的最新代码**跑一遍。
+#
+# 为什么不能只靠 ci.yml：ci.yml 只在本仓库 push / PR 时触发。
+# 若上游内核改了而本仓库一行不动，就**不会有任何一次 CI 运行** ——
+# 于是 engines 窗口过期、扩展点变更这类问题要等到下次装机才暴露，
+# 症状是"工具消失、问诊绕过 Dify"，而那时已经装在医师机器上了。
+#
+# 断言的是**挂载结果**而不是 engines 声明：内核加载 Pack 的口径是
+# "坏 Pack 只 warn 并跳过，绝不阻塞启动"，engines 只是跳过的原因之一。
+# 见 tools/kernel-sentinel.mjs 的头部说明。
+name: 内核版本哨兵
+
+on:
+  # 每周一 03:17 UTC（避开整点高峰；cron 是 UTC）
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: 要对齐的内核 ref（默认 main）
+        required: false
+        default: main
+
+jobs:
+  sentinel:
+    name: 内核 ${{ matrix.kernel_ref }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        kernel_ref: ['main', 'latest-tag']
+    steps:
+      - name: Checkout（本仓库 → tcm/）
+        uses: actions/checkout@v4
+        with:
+          path: tcm
+
+      - name: 解析 latest-tag
+        id: ref
+        shell: bash
+        run: |
+          want='${{ matrix.kernel_ref }}'
+          if [ "$want" = "latest-tag" ]; then
+            tag=$(git ls-remote --tags --sort=-v:refname https://github.com/MingDaoTCM/MingDao-Harness.git 'v*' \
+                  | awk '{print $2}' | sed 's#refs/tags/##' | grep -v '{}' | head -1)
+            if [ -z "$tag" ]; then echo "::error::无法解析内核最新 tag"; exit 1; fi
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+            echo "解析到内核最新 tag：$tag"
+          else
+            echo "ref=$want" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout（内核 → MingDao-Harness/，与 tcm/ 同级）
+        uses: actions/checkout@v4
+        with:
+          repository: MingDaoTCM/MingDao-Harness
+          ref: ${{ steps.ref.outputs.ref }}
+          path: MingDao-Harness
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 打印内核版本
+        shell: bash
+        run: node -p "'内核版本 v' + require('./MingDao-Harness/package.json').version"
+
+      - name: 门禁（npm test，含 kernel-sentinel 档）
+        working-directory: tcm
+        env:
+          MINGDAO_KERNEL: ${{ github.workspace }}/MingDao-Harness
+        run: npm test

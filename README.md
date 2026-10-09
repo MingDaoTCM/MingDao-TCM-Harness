@@ -16,9 +16,9 @@
 │  明道中医层（本仓库 · 装进 MINGDAO_HOME）                        │
 │  · Dify 主问诊 Provider（providers/dify.mjs）                  │
 │  · 病历号患者系统（patients.json + intake/<病历号>/）            │
-│  · 工具一 问诊采集（多轮追问 + 缺项不编造 + 落盘）               │
-│  · 工具二 复诊四态对比（消失/减轻/无变化/加重）                  │
-│  · 工具三 回访追踪（看板 + 时间线 + 预警 + 话术草稿）            │
+│  · 5 个垂域 Pack 工具：patient_lookup / patient_register /      │
+│    intake_collect / visit_compare / followup_board             │
+│    （工具清单以 layer/packs/tcm/pack.mjs 为准；doc-lint 会核对） │
 └──────────────────────────────────────────────────────────────┘
                               │ 载体
 ┌──────────────────────────────────────────────────────────────┐
@@ -75,20 +75,24 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 
 | 命令 | 作用 |
 |---|---|
-| 直接描述患者病情（带姓名） | 首诊：十问追问 → 落盘病历（分配病历号） |
+| 直接描述患者病情（带姓名） | 首诊：采集主诉/现病史 → 落盘病历（分配病历号） |
 | `复诊：<病历号或姓名+出生年>，…` | 复诊：回顾上诊 → 四态对比 → 落盘 |
 | `回访` | 回访看板：全部患者 + 超期未复诊预警 |
 | `回访 P003` / `随访 曾慧慧` | 单患者：时间线趋势 + 异常预警 + 随访话术草稿 |
 
 ## 与上游的版本关系
 
-- 本层当前对齐 **MingDao-Harness v0.6.7**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
-- 已在 v0.6.7 内核下验证全部 8 档门禁：`pack verify`（静态）、`pack.test.mjs`（53 项）、
-  `integration.test.mjs`（11 项）、`dify.test.mjs`（18 项）、`tcm-data`（14 项）、`ui-wiring`（7 项）、
-  `desktop-orchestrator`（19 项）、`site`（22 项）**全部通过，无代码改动**；
-  v0.6.7 中与扩展点相关的只有一处、且是**改进**：自定义 Provider 模块的 ESM 缓存键从
-  `?v=Date.now()` 改为按 **mtime**（此前每次建 provider 都重新 import，长驻 WebUI 里模块实例无限累积）；
-  另有权限面的 deny 绕过收口（`$(…)`/子 shell/`\r`/续行 当分隔符）——本层 Pack 不执行 shell，不受影响；
+- 本层当前对齐 **MingDao-Harness v0.6.12**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
+  > 这个版本号不是装饰：`tools/doc-lint.mjs` 的 INV-6 会拿它跟**实际内核版本**比，
+  > 落后了就红 —— 提醒你「自那以后本层没有重新验证过」。内核升版本后跑一遍 `npm test` 再改这个数。
+  > （2026-10-09 就是这么发现的：内核已到 v0.6.12，README 还写 0.6.10，门禁当场变红。）
+- 已在 v0.6.12 内核下验证全部 11 档门禁（`npm test`，清单唯一定义处 `tools/gates.mjs`）：
+  `pack verify`（静态）、`doc-lint`（8 条文档不变量）、`kernel-sentinel`（Pack 真的挂载）、
+  `pack.test.mjs`（55 项）、`integration.test.mjs`（11 项）、`dify.test.mjs`（21 项）、
+  `tcm-data`（14 项）、`settings`（8 项）、`ui-wiring`（8 项）、
+  `desktop-orchestrator`（25 项）、`site`（27 项）—— **全部通过**；
+- **内核发新版不会通知本层**：push/PR 之外，每周还有一次 `.github/workflows/kernel-sentinel.yml`
+  对内核 `main` 跑一遍全部门禁 —— 上游一改，最迟一周内在这里变红，而不是等装机才发现；
 - 接入的扩展点：垂域 **Pack（Pack API v1：tools / constraints / promptSections）** + 自定义 **Provider（dify.mjs，含 `supportsVision`）**；
 - 内核升级后如扩展点有变，本层适配后再跟版本；
 - **内核 bug 在上游修，本层不重复造**。

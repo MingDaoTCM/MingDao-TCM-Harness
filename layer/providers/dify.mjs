@@ -388,10 +388,17 @@ export function createProvider(pc) {
       // —— ① 工具编排：判定要调工具就交回内核执行；判定失败一律回落 ——
       // 只把垂域工具交给编排器（见 PACK_TOOL_PREFIX 的说明）；没有垂域工具就整段跳过，
       // 不为「注定没有工具可调」的一轮多花一次模型调用。
+      //
+      // ⚠ 判定这次调用的 usage **无论判定结果是什么都要带回去**。
+      // 「判定为不需要工具」时它是一次真实的花费（输入 1～2k token，输出几十 token），
+      // 而这一轮的花费此前只在不为 null 的分支里返回 —— 于是**绝大多数回合**（不调工具才是常态）
+      // 的编排成本完全隐身：不进账、不触发日费用护栏，与迁移前 `usage:{0,0}` 是同一类问题。
+      let orchestratorUsage = null;
       const packTools = tools.filter((t) => String(t?.function?.name || '').startsWith(PACK_TOOL_PREFIX));
       if (packTools.length) {
         try {
           const d = await decide(messages, packTools, opts.signal);
+          orchestratorUsage = d?.usage || null;
           if (d?.toolCalls?.length) {
             return { text: '', reasoning: '', toolCalls: d.toolCalls, usage: d.usage, finish: 'tool_calls' };
           }
@@ -438,7 +445,8 @@ export function createProvider(pc) {
         const raw = await dres.text().catch(() => '');
         // Dify 挂了（5xx / 401 / 限流）→ 先兜底出正文，别让医师对着报错框问不了诊
         const fb = await consultWithoutDify(messages, `Dify HTTP ${dres.status}：${raw.slice(0, 120)}`, opts.signal);
-        if (fb) return fb;
+        // 兜底也要带上编排判定的花费：那次调用已经发生了，不能因为后面失败就不记账
+        if (fb) return { ...fb, usage: mergeUsage(fb?.usage, orchestratorUsage) };
         throw new Error(`[dify] HTTP ${dres.status}: ${raw.slice(0, 200)}`);
       }
 
@@ -531,7 +539,7 @@ export function createProvider(pc) {
       // （医师看得到），旧的提示文案也更贴切；把它一律当失败会丢掉这段可看内容。
       if (isInternalToken(text)) {
         const fb = await consultWithoutDify(messages, `Dify 返回的是内部口令「${text}」而非正文`, opts.signal);
-        if (fb) return fb;
+        if (fb) return { ...fb, usage: mergeUsage(fb?.usage, orchestratorUsage) };
         text = '（本次回复未产出可见正文：Dify 工作流输出异常，请重试）';
       }
       if (!text) {
@@ -543,9 +551,26 @@ export function createProvider(pc) {
         text,
         reasoning,
         toolCalls: null,
-        usage: { prompt_tokens: usage.prompt_tokens || 0, completion_tokens: usage.completion_tokens || 0 },
+        usage: mergeUsage({ prompt_tokens: usage.prompt_tokens || 0, completion_tokens: usage.completion_tokens || 0 }, orchestratorUsage),
         finish: 'stop',
       };
     },
+  };
+}
+
+/**
+ * 把两次模型调用的花费合并成一份 usage。
+ *
+ * 为什么是**相加**而不是各留一份：内核按 `{prompt_tokens, completion_tokens}` 记账与判护栏，
+ * 形状不能改；而这一回合确实消耗了两笔 token（编排判定 + 问诊/兜底），相加才是真实成本。
+ * 任一处为 null/undefined 都按 0 处理 —— 花费不明时记 0 是错的，但**不记账**更错，
+ * 缺字段比多记一个 0 更难查（后者至少留下"这一轮有调用"的痕迹）。
+ * @param {any} a @param {any} b
+ */
+function mergeUsage(a, b) {
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  return {
+    prompt_tokens: num(a?.prompt_tokens) + num(b?.prompt_tokens),
+    completion_tokens: num(a?.completion_tokens) + num(b?.completion_tokens),
   };
 }

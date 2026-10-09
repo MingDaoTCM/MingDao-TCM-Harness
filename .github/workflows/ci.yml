@@ -1,7 +1,15 @@
 # 明道中医 · 问诊台 —— 门禁（与上游 ci.yml 同构：也都需要把内核检出到同级）
 #
-# 跑的是本项目的 7 档门禁（pack verify / pack / integration / dify / tcm-data / ui-wiring /
-# desktop-orchestrator）。最后那档会**真起内核 + 真起问诊台**，所以它不是纯静态检查。
+# 跑的是 tools/gates.mjs 里定义的**全部 11 档门禁**（唯一定义处，CI 不再内联一份清单）。
+# 其中 desktop-orchestrator 那档会**真起内核 + 真起问诊台**，所以它不是纯静态检查。
+#
+# 矩阵为什么是 6 条腿（3 平台 × Node 20/22）：
+#   这个产品的交付形态是**三平台桌面应用**（win/mac/linux 各自打包），
+#   而此前门禁只在 ubuntu + Node 20 上跑过 —— 等于另外两个平台"从没被验证过"，
+#   却和验证过的那个一起发布。路径分隔符、大小写敏感的文件系统、换行符
+#   都只在这两条腿上才会暴露。Node 22 那条是前瞻腿：内核与本项目都声明 >=20，
+#   LTS 换代时不应由用户先发现。
+#   fail-fast: false —— 一条腿红不影响看到其他腿的结果（否则修完 win 才看见 mac 也是红的）。
 name: CI
 
 on:
@@ -11,7 +19,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['20', '22']
     steps:
       - name: Checkout（本仓库 → tcm/）
         uses: actions/checkout@v4
@@ -27,20 +41,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
 
-      - name: 门禁（9 档）
+      # 门禁只在这里入口一处：`npm test` → tools/run-gates.mjs → tools/gates.mjs。
+      # 不要再往这个文件里加 node …test.mjs 的行 —— 那会让清单出现第二份定义，
+      # 而 doc-lint 的 INV-7 就是为了拦这件事。
+      - name: 门禁（npm test）
         working-directory: tcm
         env:
           MINGDAO_KERNEL: ${{ github.workspace }}/MingDao-Harness
-        run: |
-          set -e
-          node "$MINGDAO_KERNEL/src/cli.js" pack verify layer/packs/tcm
-          node layer/packs/tcm/test/pack.test.mjs
-          node layer/packs/tcm/test/integration.test.mjs
-          node layer/providers/test/dify.test.mjs
-          node tools/tcm-ui/test/tcm-data.test.mjs
-          node tools/tcm-ui/test/settings.test.mjs
-          node tools/tcm-ui/test/ui-wiring.test.mjs
-          node tools/tcm-ui/test/desktop-orchestrator.test.mjs
-          node site/test/site.test.mjs
+        run: npm test

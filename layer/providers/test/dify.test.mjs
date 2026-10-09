@@ -125,6 +125,22 @@ await testAsync('① 判定要调工具 → 交回 toolCalls，且**不调用 Di
   assert.equal(calls.filter((c) => c.url.includes('/chat-messages')).length, 0, '判定要调工具时不该再问 Dify');
 });
 
+// ★ 记账不变量：**不调工具**那一轮，判定调用的花费也必须入账。
+//   「判定为不需要工具」是常态（多数回合都是纯问诊），所以漏掉它 = 大部分花费隐身：
+//   不进账本、不触发日费用护栏 —— 与迁移前硬编码 `usage:{0,0}` 是同一类问题，只是更隐蔽
+//   （调用真实发生了、账上却看不出来）。这条断言守的就是"常态那一半"。
+await testAsync('①b 判定**不**调工具 → 判定调用的 usage 也要并进账（不调工具才是常态）', async () => {
+  writeCreds({ dify: 'app-t', deepseek: 'sk-t' });
+  clearConfig();
+  installFetch({ decider: 'continue' }); // 判定返回 20/2，Dify 返回 10/5
+  const p = createProvider({ name: 'dify', baseUrl: 'https://dify.example.com' });
+  const r = await p.chat({ messages: userMessages(), tools: TOOLS });
+  assert.equal(r.finish, 'stop');
+  assert.equal(r.toolCalls, null, '不调工具时不该带 toolCalls');
+  assert.equal(r.usage.prompt_tokens, 30, '判定 20 + 问诊 10：两笔输入都要记（漏了就是花费隐身）');
+  assert.equal(r.usage.completion_tokens, 7, '判定 2 + 问诊 5：两笔输出都要记');
+});
+
 // ★ 对应 2026-09-23 用户报的「无落盘、同一患者复诊仍按初诊」：
 //   编排器查到「未找到既有患者」就停了，没接着 patient_register + intake_collect，
 //   于是这次就诊丢失、下次复诊又被判首诊（病历断链）。

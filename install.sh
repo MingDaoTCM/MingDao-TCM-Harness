@@ -38,9 +38,11 @@ if [ -d "$HERE/layer/packs" ]; then
   done
 fi
 
-# 3) 安装 Provider（**过渡期保留**）
-#    当前中医问诊仍由 providers/dify.mjs 的 chat() 驱动。Pack 里的域工具要被真正调用，
-#    取决于「谁驱动问诊」的架构决策 —— 见 layer/packs/tcm/README.md 的「待决策」一节。
+# 3) 安装 Provider
+#    路线 A（已定并已接线）：providers/dify.mjs 每轮先判「要不要调 Pack 工具」，
+#    要调就交回内核执行，不调才走 Dify 流式问诊 —— 见 layer/packs/tcm/README.md 的「四、谁驱动问诊」一节。
+#    （此处曾指向一个「待决策」小节：路线 A 定下来后那一节已改名，指向不存在的锚点比没有指引更糟。
+#     现在 tools/doc-lint.mjs 的 INV-5 会校验 install.sh 引用的小节是否真的存在。）
 cp "$HERE/layer/providers/"*.mjs "$HOME_DIR/providers/"
 echo "   ✓ 已安装 Provider: $(cd "$HERE/layer/providers" && ls -1 *.mjs | tr '\n' ' ')"
 

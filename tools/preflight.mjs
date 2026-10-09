@@ -13,15 +13,15 @@
 //
 // 用法：node tools/preflight.mjs            （本地，打 tag 前）
 //       node tools/preflight.mjs --quick    （跳过耗时项）
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GATES, GATE_COUNT, kernelRoot } from './gates.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
-const KERNEL = process.env.MINGDAO_KERNEL || path.resolve(REPO, '..', 'MingDao-Harness');
+const KERNEL = kernelRoot();
 const QUICK = process.argv.includes('--quick');
 const DESKTOP = path.join(REPO, 'tools', 'tcm-ui', 'desktop');
 
@@ -46,23 +46,14 @@ try {
   bad('内核 package.json', `读不到（${e?.message}）—— 产物里内核版本会变成 0.0.0，Pack 被静默跳过`);
 }
 
-// ── 1. 八档门禁
-console.log('\n[1] 门禁');
-const gates = [
-  ['pack verify', ['src/cli.js', 'pack', 'verify', path.join(REPO, 'layer/packs/tcm')], KERNEL],
-  ['pack.test', [path.join(REPO, 'layer/packs/tcm/test/pack.test.mjs')], REPO],
-  ['integration', [path.join(REPO, 'layer/packs/tcm/test/integration.test.mjs')], REPO],
-  ['dify.test', [path.join(REPO, 'layer/providers/test/dify.test.mjs')], REPO],
-  ['tcm-data', [path.join(REPO, 'tools/tcm-ui/test/tcm-data.test.mjs')], REPO],
-  ['settings', [path.join(REPO, 'tools/tcm-ui/test/settings.test.mjs')], REPO],
-  ['ui-wiring', [path.join(REPO, 'tools/tcm-ui/test/ui-wiring.test.mjs')], REPO],
-  ['desktop-orch', [path.join(REPO, 'tools/tcm-ui/test/desktop-orchestrator.test.mjs')], REPO],
-  ['site', [path.join(REPO, 'site/test/site.test.mjs')], REPO],
-];
-for (const [name, args, cwd] of gates) {
-  const r = run('node', args, { cwd });
+// ── 1. 门禁（清单**不再写在这里**：唯一定义处是 tools/gates.mjs，共 GATE_COUNT 档门禁）
+//    此前这里是第二份内联清单，标题写着「八档」而实际跑 9 档 —— 档数漂移就意味着某一档没人跑过。
+console.log(`\n[1] 门禁：共 ${GATE_COUNT} 档门禁（唯一定义处 tools/gates.mjs）`);
+for (const g of GATES) {
+  const r = run(process.execPath, g.args(), { cwd: g.cwd === 'kernel' ? KERNEL : REPO });
   const line = (r.out.match(/结果：通过 \d+，失败 \d+/) || [])[0] || (r.code === 0 ? 'ok' : '');
-  if (r.code === 0) ok(name, line); else bad(name, (r.out.trim().split('\n').slice(-3).join(' | ') || 'exit ' + r.code));
+  if (r.code === 0) ok(g.name, line);
+  else bad(g.name, (r.out.trim().split('\n').slice(-3).join(' | ') || 'exit ' + r.code));
 }
 
 // ── 2. 打包布局：**在"已经打过包"的状态下**再验一次
