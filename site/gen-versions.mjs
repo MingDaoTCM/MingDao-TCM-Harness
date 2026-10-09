@@ -9,17 +9,28 @@
 //   过滤掉纯发布提交（`chore: release`）与 Merge 提交，它们对读者没有信息量。
 //
 // 用法：MINGDAO_GITHUB_TOKEN=… node site/gen-versions.mjs > versions.json
-import { execFileSync } from 'node:child_process';
 
 const REPO = process.env.TCM_REPO || 'MingDaoTCM/MingDao-TCM-Harness';
 const LIMIT = Number(process.env.TCM_VERSIONS_LIMIT || 30);
 
-/** 用 gh CLI（CI 里已认证）；失败则抛，由调用方决定是否继续 */
-function gh(args) {
-  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+// 用 **token + fetch**，不用 gh CLI：CI 里两者都有，但本机往往只配了 token
+// （`gh` 需要 GH_TOKEN，缺了就静默失败 —— 这个脚本第一版就因此在本机跑不出来）。
+const TOKEN = process.env.MINGDAO_GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || '';
+if (!TOKEN) {
+  console.error('缺少 MINGDAO_GITHUB_TOKEN / GH_TOKEN —— 读私有 Release 需要它');
+  process.exit(2);
+}
+async function ghApi(path) {
+  const r = await fetch(`https://api.github.com${path}`, {
+    headers: { Authorization: `Bearer ${TOKEN}`, Accept: 'application/vnd.github+json', 'User-Agent': 'mingdao-tcm-site' },
+  });
+  if (!r.ok) throw new Error(`GitHub ${r.status} ${path}`);
+  return r.json();
 }
 
-const releases = JSON.parse(gh(['release', 'list', '-R', REPO, '--limit', String(LIMIT), '--json', 'tagName,publishedAt,name']));
+const releases = (await ghApi(`/repos/${REPO}/releases?per_page=${LIMIT}`))
+  .filter((r) => !r.draft)
+  .map((r) => ({ tagName: r.tag_name, publishedAt: r.published_at, name: r.name || r.tag_name }));
 const versions = [];
 for (let i = 0; i < releases.length; i++) {
   const tag = releases[i].tagName;
@@ -27,7 +38,7 @@ for (let i = 0; i < releases.length; i++) {
   const notes = [];
   if (prev) {
     try {
-      const cmp = JSON.parse(gh(['api', `repos/${REPO}/compare/${prev}...${tag}`]));
+      const cmp = await ghApi(`/repos/${REPO}/compare/${prev}...${tag}`);
       for (const c of (cmp.commits || []).slice(0, 25)) {
         const msg = String(c?.commit?.message || '').split('\n')[0].trim();
         if (msg && !/^(chore: release|Merge )/.test(msg)) notes.push(msg);
