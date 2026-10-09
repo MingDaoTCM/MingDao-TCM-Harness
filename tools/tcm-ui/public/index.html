@@ -72,6 +72,13 @@
           <button class="ghost" id="tonguePick" style="flex:1">📁 选择图片</button>
         </div>
         <input id="tongue" type="file" accept="image/*" hidden />
+        <!-- B-002：**已附照片时才出现**的重拍/移除。此前拍完只有一张小缩略图，
+             想撤掉这张照片界面上根本没有入口（只能去点"选择图片"再取消——没人能发现）；
+             重拍也没有任何提示。 -->
+        <div class="row" id="tongueActions" hidden style="margin:0 0 6px">
+          <button class="ghost" id="tongueRetake" style="flex:1">🔄 重拍</button>
+          <button class="ghost" id="tongueRemove" style="flex:1">✕ 移除照片</button>
+        </div>
         <div id="camBox" class="cambox" hidden>
           <!-- video 只做**数据源**（隐藏）：Electron 在 Windows/macOS 上把 getUserMedia 的
                video 合成到窗口时常年黑屏（解码正常、只是没画出来）。可见画面改用 canvas ——
@@ -79,6 +86,15 @@
                而且预览与拍摄是**同一块画布**，所见即所拍。 -->
           <video id="camVideo" playsinline autoplay muted style="display:none"></video>
           <canvas id="camCanvas" class="camview" width="640" height="480"></canvas>
+          <!-- B-001：拉近。倍数可调而不是只有"1×/最大"两档；硬件支持 zoom 时驱动硬件
+               （画质更好），不支持则走数字裁切（永远可用）。 -->
+          <div class="row" style="margin-top:8px">
+            <span class="zoomlab">拉近</span>
+            <button class="ghost" id="camZoomOut" style="padding:2px 10px">−</button>
+            <input id="camZoom" type="range" min="1" max="3" step="0.1" value="1" />
+            <button class="ghost" id="camZoomIn" style="padding:2px 10px">＋</button>
+            <span id="camZoomLabel" class="zoomlab">1.0×</span>
+          </div>
           <div class="row" style="margin-top:8px">
             <button class="primary" id="camShoot" style="flex:1">拍摄</button>
             <button class="ghost" id="camCancel">取消</button>

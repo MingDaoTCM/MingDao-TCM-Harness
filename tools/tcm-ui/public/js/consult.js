@@ -348,15 +348,35 @@ export function initConsult() {
     if (String(dataUrl).length > 7 * 1024 * 1024) { tip.textContent = '图片过大（内核限制单张 ≤5MB）'; return false; }
     pendingAttachments = [{ type: 'image', name: name || '舌象.jpg', dataUrl }];
     thumb.src = dataUrl; thumb.style.display = 'block';
+    const act = $('#tongueActions'); if (act) act.hidden = false;   // B-002：拍完就给出重拍/移除
     tip.textContent = '已附上 —— 发送时内核会把照片交给 Dify 工作流（Dify 侧需开启视觉）。';
     return true;
   };
 
+  /**
+   * 清空已附舌象照片 —— **唯一一处**负责三处状态同步（附件 / 缩略图 / 提示 / 按钮）。
+   * 为什么必须唯一：此前这段同步被抄在 4 个地方（选图取消、发送后、清空、取消拍照），
+   * 漏改任何一处都会出现"提示说已附上、实际没附"这类最难查的错位。
+   */
+  const clearAttachment = (tipText = '') => {
+    pendingAttachments = [];
+    const t = $('#tongue'); if (t) t.value = '';
+    const thumb = $('#thumb'); if (thumb) { thumb.style.display = 'none'; thumb.removeAttribute('src'); }
+    const tip = $('#tongueTip'); if (tip) tip.textContent = tipText;
+    const act = $('#tongueActions'); if (act) act.hidden = true;
+  };
+  /** 提示语按"当前到底有没有附件"重算 —— 不猜、不记忆 */
+  const refreshTip = () => {
+    const tip = $('#tongueTip'); if (!tip) return;
+    tip.textContent = pendingAttachments.length
+      ? '已附上 —— 发送时内核会把照片交给 Dify 工作流（Dify 侧需开启视觉）。'
+      : '';
+  };
+
   $('#tongue').addEventListener('change', async (e) => {
     const f = e.target.files && e.target.files[0];
-    const tip = $('#tongueTip'); const thumb = $('#thumb');
-    pendingAttachments = [];
-    if (!f) { thumb.style.display = 'none'; tip.textContent = ''; return; }
+    const tip = $('#tongueTip');
+    if (!f) { clearAttachment(); return; }
     if (!/^image\//.test(f.type)) { tip.textContent = '只支持图片文件'; return; }
     const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(f); });
     attachImage(dataUrl, f.name);
@@ -384,7 +404,9 @@ export function initConsult() {
       //   在 Windows/macOS 的 Electron 上会一直渲染黑屏（用户实测："一个黑框，无图像"）。
       $('#camBox').hidden = false;
       // facingMode: environment 优先后置/外接；桌面端通常只有内置，浏览器会自行忽略
-      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+      // 采集分辨率提到 1920：拉近是**裁切**，裁完还要有足够像素才谈得上"看得清"
+      // （原为 ideal 1280，2× 裁切后只剩 640 宽的原始像素，放大即糊）
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 } }, audio: false });
       const v = $('#camVideo');
       v.srcObject = camStream;
       // 等元数据：videoWidth 要 loadedmetadata 之后才有效，否则「拍摄」抓到的是 0×0 空图
@@ -399,6 +421,18 @@ export function initConsult() {
       const track = camStream.getVideoTracks()[0];
       if (!track || track.readyState !== 'live') throw new Error('摄像头轨道未就绪（' + (track?.readyState || '无轨道') + '）');
       const label = track.label || '未知设备';
+      // 硬件变焦能力探测：拿不到就当没有（多数 mac 摄像头没有 zoom 字段）
+      try {
+        const caps = track.getCapabilities ? track.getCapabilities() : null;
+        if (caps && Number.isFinite(caps.zoom?.max) && caps.zoom.max > caps.zoom.min) {
+          hwZoom = { min: caps.zoom.min, max: caps.zoom.max, step: caps.zoom.step };
+        } else hwZoom = null;
+      } catch { hwZoom = null; }
+      // 调试开关：强制走数字裁切。存在的理由 —— 大多数 mac 摄像头**没有**硬件变焦，
+      // 数字裁切才是医师机器上真正会走的那条路；而带假设备的自动化验证恰好总能拿到
+      // 硬件变焦，于是那条路永远验不到。留一个显式开关，让验证能覆盖它。
+      if (window.localStorage?.getItem('tcmCamForceDigital') === '1') hwZoom = null;
+      await applyZoom(zoom);
       startPreview();
       // 黑帧自检：有些平台在**系统没放行摄像头**时既不弹授权框、也不报错，
       // 只给一路全黑的帧（macOS 缺 device.camera 授权、Windows 关了"让桌面应用访问相机"
@@ -438,7 +472,27 @@ export function initConsult() {
     }
   };
 
-  /** 把 video 的帧泵到 canvas 上（预览与拍摄共用这一块画布） */
+  // ── B-001 拉近：硬件优先、数字兜底 ────────────────────────────────
+  // 为什么两条都要：`getCapabilities()` 在部分平台**不存在**，而 macOS 多数摄像头
+  // 根本不暴露 `zoom` —— 只做硬件变焦等于在 mac 上完全失效。
+  let zoom = 1;
+  let hwZoom = null;              // 有值 = 该设备支持硬件变焦（{min,max,step}），此时不裁切
+  const zoomLabel = () => `${zoom.toFixed(1)}×${hwZoom ? '（硬件）' : ''}`;
+  async function applyZoom(next) {
+    zoom = Math.min(3, Math.max(1, Number(next) || 1));
+    const lab = $('#camZoomLabel'); if (lab) lab.textContent = zoomLabel();
+    const sl = $('#camZoom'); if (sl && Number(sl.value) !== zoom) sl.value = String(zoom);
+    if (hwZoom) {
+      const raw = hwZoom.min + (hwZoom.max - hwZoom.min) * ((zoom - 1) / 2);   // 1×→min，3×→max
+      const step = Number(hwZoom.step) > 0 ? Number(hwZoom.step) : 0.1;
+      const val = Math.round(raw / step) * step;
+      try { await camStream?.getVideoTracks?.()[0]?.applyConstraints({ advanced: [{ zoom: val }] }); }
+      catch { /* 硬件拒绝就悄悄退回数字裁切，不打扰医师 */ hwZoom = null; }
+    }
+  }
+
+  /** 把 video 的帧泵到 canvas 上（预览与拍摄共用这一块画布）。
+   *  拉近 = **在这里裁中心区域**：所以"看到的"与"拍到的"永远是同一块像素。 */
   let previewTimer = null;
   function startPreview() {
     const v = $('#camVideo'); const c = $('#camCanvas');
@@ -446,8 +500,13 @@ export function initConsult() {
     const ctx = c.getContext('2d');
     const paint = () => {
       if (!v.videoWidth) { previewTimer = requestAnimationFrame(paint); return; }
-      if (c.width !== v.videoWidth || c.height !== v.videoHeight) { c.width = v.videoWidth; c.height = v.videoHeight; }
-      try { ctx.drawImage(v, 0, 0, c.width, c.height); } catch { /* 偶发失败不致命，下一帧再试 */ }
+      const useCrop = !hwZoom && zoom > 1;                       // 硬件变焦生效时不重复裁切
+      const cw = Math.max(1, Math.round(v.videoWidth / (useCrop ? zoom : 1)));
+      const ch = Math.max(1, Math.round(v.videoHeight / (useCrop ? zoom : 1)));
+      const sx = Math.round((v.videoWidth - cw) / 2);
+      const sy = Math.round((v.videoHeight - ch) / 2);
+      if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+      try { ctx.drawImage(v, sx, sy, cw, ch, 0, 0, cw, ch); } catch { /* 偶发失败不致命，下一帧再试 */ }
       previewTimer = requestAnimationFrame(paint);
     };
     stopPreview();
@@ -477,7 +536,18 @@ export function initConsult() {
     camStop();
     if (attachImage(dataUrl, '舌象-拍照.jpg')) tip.textContent += '（摄像头拍摄 ' + c.width + '×' + c.height + '）';
   };
-  $('#camCancel').onclick = () => { camStop(); $('#tongueTip').textContent = ''; };
+  // 取消 = 只是关掉取景框，**不改变已附的照片**（B-002 验收第 5 条）。
+  // 原实现顺手把提示抹了 —— 照片还在、提示没了，属状态错位。
+  $('#camCancel').onclick = () => { camStop(); refreshTip(); };
+
+  // B-001 控件：滑块 + 加减按钮（倍数连续可调，不是只有两档）
+  $('#camZoom').oninput = (e) => { applyZoom(e.target.value); };
+  $('#camZoomIn').onclick = () => applyZoom(zoom + 0.2);
+  $('#camZoomOut').onclick = () => applyZoom(zoom - 0.2);
+
+  // B-002：重拍 = 丢弃上一张并重开取景框；移除 = 回到"未附照片"
+  $('#tongueRetake').onclick = () => { clearAttachment(); $('#tongueShot').click(); };
+  $('#tongueRemove').onclick = () => { clearAttachment('已移除舌象照片'); };
 
   $('#compose').onclick = () => { prefillConsult(composeMessage()); };
 
@@ -489,8 +559,7 @@ export function initConsult() {
     const att = pendingAttachments.slice();
     if (att.length) {
       pendingAttachments = [];
-      $('#tongue').value = ''; $('#thumb').style.display = 'none';
-      $('#tongueTip').textContent = '';
+      clearAttachment();
     }
     send(text, att);
   };
@@ -499,7 +568,7 @@ export function initConsult() {
     for (const id of ['f_zhushu', 'f_xianbingshi', ...OPT_FIELDS.map(([k]) => 'f_' + k)]) { const el = $('#' + id); if (el) el.value = ''; }
     for (const id of ['pName', 'pBirth']) $('#' + id).value = '';
     $('#pSex').value = ''; $('#pKind').value = 'auto';
-    $('#tongue').value = ''; $('#thumb').style.display = 'none'; $('#tongueTip').textContent = '';
+    clearAttachment();
     pendingAttachments = [];
   };
 
@@ -507,7 +576,7 @@ export function initConsult() {
     const t = $('#input').value;
     const att = pendingAttachments.slice();
     $('#input').value = '';
-    if (att.length) { pendingAttachments = []; $('#tongue').value = ''; $('#thumb').style.display = 'none'; $('#tongueTip').textContent = ''; }
+    if (att.length) clearAttachment();
     send(t, att);
   };
   $('#stop').onclick = () => { try { ctrl?.abort(); } catch {} postJSON('/api/abort', {}).catch(() => {}); };

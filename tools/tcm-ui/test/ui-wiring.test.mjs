@@ -104,5 +104,30 @@ test('★ 摄像头权限：request 与 check 两个处理器都必须设（Elec
   assert.ok(/!ok|cb\(ok\)/.test(main), '拒绝时要走 cb(false)');
 });
 
+
+test('★ B-002：清空附件只有一条路径（状态同步不许再抄成多份）', () => {
+  const js = fs.readFileSync(path.join(HERE, '..', 'public', 'js', 'consult.js'), 'utf8');
+  assert.ok(/const clearAttachment = /.test(js), '应有 clearAttachment 单一实现');
+  // 三处状态必须都在 clearAttachment 里改；别处不许再直接抹 thumb/tip
+  const body = js.slice(js.indexOf('const clearAttachment = '), js.indexOf('const refreshTip'));
+  for (const k of ['pendingAttachments = []', "thumb.style.display = 'none'", "act.hidden = true"]) {
+    assert.ok(body.includes(k), `clearAttachment 必须负责：${k}`);
+  }
+  const stray = js.split('\n').filter((l) => /thumb\.style\.display = 'none'/.test(l) && !/clearAttachment|const thumb|refreshTip/.test(l));
+  assert.equal(stray.length, 0, '除 clearAttachment 外不得再直接隐藏缩略图：' + stray.join(' | '));
+});
+
+test('★ B-001：变焦两条路都在（硬件优先、数字兜底）+ 采集分辨率足够裁', () => {
+  const js = fs.readFileSync(path.join(HERE, '..', 'public', 'js', 'consult.js'), 'utf8');
+  assert.ok(/getCapabilities/.test(js), '必须探测硬件变焦能力');
+  assert.ok(/applyConstraints/.test(js), '必须能驱动硬件变焦');
+  assert.ok(/useCrop = !hwZoom && zoom > 1/.test(js), '硬件缺位时必须回落到数字裁切');
+  assert.ok(/ideal: 1920/.test(js), '采集分辨率要够（裁切后仍要有像素，否则只是把糊的放大）');
+  const html = fs.readFileSync(path.join(HERE, '..', 'public', 'index.html'), 'utf8');
+  for (const id of ['camZoom', 'camZoomIn', 'camZoomOut', 'tongueRetake', 'tongueRemove', 'tongueActions']) {
+    assert.ok(html.includes(`id="${id}"`), `界面缺 #${id}`);
+  }
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);
