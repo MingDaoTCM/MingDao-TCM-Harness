@@ -422,5 +422,23 @@ await testAsync('auth.json 是 0600 且**不含明文密码**', () => {
 child.kill('SIGTERM');
 fs.rmSync(ROOT, { recursive: true, force: true });
 fs.rmSync(DATA, { recursive: true, force: true });
+
+await testAsync('★ 首页 CSS 注释必须配平 + 统计四规则成套（注释失衡会静默吞掉规则）', async () => {
+  // 实测事故：一次改注释时留下多余的 `*/`，造成非法 token → 浏览器把紧随其后的
+  // `.stats{display:flex}` 整条丢弃 → 统计卡片变成整行一张、观感崩掉 ✗，
+  // 而页面**不报任何错**（CSS 容错），只能靠肉眼看出来。
+  const html = fs.readFileSync(path.join(SITE, 'public', 'index.html'), 'utf8');
+  const style = html.split('</style>')[0];
+  const open = (style.match(/\/\*/g) || []).length;
+  const close = (style.match(/\*\//g) || []).length;
+  assert.equal(open, close, `CSS 注释不配平：/* ${open} 个、*/ ${close} 个 —— 多出的 */ 会让后续规则被静默丢弃`);
+  // 统计那四条规则必须成套存在（少一条不会报错，但观感会崩）
+  for (const rule of ['.stats{display:flex', '.stats-live{', '.stat{background', '.stat b{display:block']) {
+    assert.ok(style.includes(rule), `缺统计规则 ${rule}（缺了页面不报错、但布局会崩）`);
+  }
+  // 统计数字必须显式居中（原先靠 hero 的 text-align 继承，挪出 hero 就丢了）
+  assert.match(style, /\.stat\{[^}]*text-align:center/, '.stat 必须显式 text-align:center');
+});
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);
