@@ -127,7 +127,19 @@ console.log('\n[4] 仓库卫生：密钥不许内置');
 await testAsync('★ 仓库里不得出现内置密钥（只有设置模块负责收用户输入）', () => {
   const REPO = path.resolve(HERE, '..', '..', '..');
   const exts = new Set(['.mjs', '.js', '.json', '.html', '.yml', '.yaml', '.md', '.css']);
-  const skipDir = new Set(['node_modules', '.git', 'dist', 'out', 'site-downloads']);
+  // ⚠ `kernel` 是 **CI 注入的检出**（工作流里 `actions/checkout … path: kernel`），
+  //   它落在本仓库工作树**里面** —— 走遍全目录会扫到内核自己的测试夹具（里面本来就有假密钥）。
+  //   本机内核在 `../MingDao-Harness`（仓库外面），所以这个差异**只有 CI 才暴露**：
+  //   v0.1.26 的 preflight 正是因此失败、构建被跳过（闸门本身工作正常）。
+  //   语义正确的做法：只听**本仓库跟踪的文件**（git ls-files）—— 注入的检出天然不在其中；
+  //   同时把 `kernel` 也列进跳过目录，供"不是 git 仓库"的回落路径使用。
+  const skipDir = new Set(['node_modules', '.git', 'dist', 'out', 'site-downloads', 'kernel']);
+  const tracked = (() => {
+    try {
+      const out = execFileSync('git', ['ls-files', '-z'], { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      return new Set(out.split('\0').filter(Boolean));
+    } catch { return null; }          // 非 git 仓库（如解包快照）→ 回落到遍历
+  })();
   const hits = [];
   const walk = (dir, depth = 0) => {
     if (depth > 6) return;
@@ -138,6 +150,8 @@ await testAsync('★ 仓库里不得出现内置密钥（只有设置模块负�
       try { st = fs.statSync(p); } catch { continue; }
       if (st.isDirectory()) { walk(p, depth + 1); continue; }
       if (!exts.has(path.extname(name))) continue;
+      // 只听**本仓库跟踪的文件**：CI 注入的检出（kernel/）天然不在其中
+      if (tracked && !tracked.has(path.relative(REPO, p).split(path.sep).join("/"))) continue;
       let txt = '';
       try { txt = fs.readFileSync(p, 'utf8'); } catch { continue; }
       // 真密钥形态：sk-/app- 后面跟一长串无空白字符（测试夹具里的假 key 都带连字符分段，不会命中）
