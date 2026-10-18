@@ -239,12 +239,5 @@ button.sm{padding:3px 9px;font-size:12px}
     border-top:1px solid var(--line);z-index:5}
   .actbar .row{margin-top:8px}
   .actbar .actcount{font-size:12px;color:var(--dim);margin-bottom:2px}
-  /* ── 3.1 患者条：顶部常驻，一眼看清"我在看谁、第几次" ── */
-  .patbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-    position:sticky;top:0;z-index:6;padding:8px 10px;margin:0 0 10px;
-    background:var(--panel2);border:1px solid var(--line);border-radius:10px}
-  .patbar .pn{font-weight:600;font-size:14.5px}
-  .patbar .pm{font-size:12.5px;color:var(--dim)}
-  .patbar .sp{flex:1}
   /* ── 3.5 字号档位：整站缩放（Electron/Chromium 支持 zoom，一处生效、完整覆盖） ── */
   body.fs-large{zoom:1.15}
