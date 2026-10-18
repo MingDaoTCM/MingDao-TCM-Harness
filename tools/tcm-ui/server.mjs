@@ -101,6 +101,37 @@ function handleTcm(/** @type {any} */ req, /** @type {any} */ res, /** @type {st
     // ── 设置：密钥由医师自己填 / 改（**不内置在仓库里**）────────────────────
     // 只监听回环地址（本页只有本机能开）＋ GET 只回脱敏值：
     // 设置页要能让医师确认"填过没有"，但不能把明文回给浏览器（截图/演示即泄露）。
+// 模型列表：**以服务商 /models 接口为准**（用户 2026-10 要求：不写死模型名）。
+// 不依赖内核模块：直接打 `{baseUrl}/models`（10 分钟内存缓存）——少一层耦合，产物里也不会缺文件。
+let modelsCache = { at: 0, key: '', list: [] };
+if (u.pathname === '/api/tcm/models') {
+  (async () => {
+    try {
+      const { orchAuth } = await import('./settings.mjs');
+      const a = orchAuth(home);
+      if (!a.apiKey) { json(res, 200, { ok: false, error: '未配置编排模型 Key —— 无法拉取官方模型名', current: a.model }); return; }
+      const cacheKey = a.baseUrl + '|' + a.model + '|' + a.apiKey.slice(-6);
+      const force = u.searchParams.get('force') === '1';
+      if (!force && modelsCache.key === cacheKey && Date.now() - modelsCache.at < 10 * 60 * 1000) {
+        json(res, 200, { ok: true, list: modelsCache.list, current: a.model, stale: a.model ? !modelsCache.list.includes(a.model) : false, fromCache: true });
+        return;
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      let r2;
+      try {
+        r2 = await fetch(`${a.baseUrl}/models`, { headers: { Authorization: `Bearer ${a.apiKey}` }, signal: ctrl.signal });
+      } finally { clearTimeout(timer); }
+      if (!r2.ok) { json(res, 200, { ok: false, error: `服务商 /models 返回 HTTP ${r2.status}`, current: a.model }); return; }
+      const j2 = await r2.json().catch(() => ({}));
+      const list = (j2?.data || j2?.models || []).map((m) => (typeof m === 'string' ? m : m?.id || m?.name || '')).filter(Boolean);
+      modelsCache = { at: Date.now(), key: cacheKey, list };
+      json(res, 200, { ok: true, list, current: a.model, stale: a.model ? !list.includes(a.model) : false, fromCache: false });
+    } catch (/** @type {any} */ e) { json(res, 200, { ok: false, error: String(e?.message || e) }); }
+  })();
+  return;
+}
+
     if (u.pathname === '/api/tcm/settings') {
       if (req.method === 'GET') {
         json(res, 200, { ok: true, settings: readSettings(home), home, currentVersion: String(ctx.currentVersion || ''), siteUrl: SITE_URL });

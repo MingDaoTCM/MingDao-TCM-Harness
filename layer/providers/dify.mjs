@@ -27,7 +27,8 @@ import path from 'node:path';
 
 const DEFAULT_DIFY_BASE = 'https://dify.mingdaotcm.cn';
 const DEFAULT_ORCH_BASE = 'https://api.deepseek.com/v1';
-const DEFAULT_ORCH_MODEL = 'deepseek-v4-flash';
+// 兜底名（正常由 config.tcm.orchestrator.model 指定，且该值应从服务商 /models 拉取）
+const DEFAULT_ORCH_MODEL = 'deepseek-flash';
 const DECIDE_TIMEOUT_MS = 20000;
 /** 判定时最多回看多少条消息（长会话下控制这次额外调用的输入成本） */
 const DECIDE_TAIL = 24;

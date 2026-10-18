@@ -50,7 +50,30 @@ async function loadSettings() {
   $('#setHome').textContent = j.home || '—';
   $('#setDifyBase').value = s.difyBaseUrl || '';
   $('#setOrchBase').value = s.orchBaseUrl || '';
-  $('#setOrchModel').value = s.orchModel || '';
+// 模型名以 **服务商 /models 接口**为准：只给真实存在的选项；保存的旧名字会明确标出来
+{
+  const sel = $('#setOrchModel'); const hint = $('#setOrchModelHint');
+  const saved = s.orchModel || '';
+  if (sel) sel.innerHTML = '<option value="">（读取中…）</option>';
+  fetch('/api/tcm/models', { cache: 'no-store' }).then((r) => r.json()).then((m) => {
+    if (!sel) return;
+    if (!m || !m.ok) {
+      sel.innerHTML = ''; const o = document.createElement('option');
+      o.value = saved; o.textContent = saved || '（拉取失败）'; sel.appendChild(o);
+      if (hint) hint.textContent = '✗ 拉取官方模型名失败：' + (m?.error || '未知');
+      return;
+    }
+    const list = m.list || [];
+    sel.innerHTML = list.map((n) => '<option value="' + n + '">' + n + '</option>').join('');
+    const known = list.includes(saved);
+    sel.value = known ? saved : (list[0] || '');
+    if (hint) {
+      hint.innerHTML = known
+        ? '✓ 服务商当前提供 ' + list.length + ' 个模型' + (m.fromCache ? '（缓存）' : '')
+        : '⚠ 保存的 <code>' + (saved || '(空)') + '</code> 已不在服务商模型列表里 —— 已预选 <code>' + sel.value + '</code>，保存后生效';
+    }
+  }).catch(() => { /* 拉不到就保留原值 */ });
+}
   $('#setDifyKeyNow').textContent = s.difyKeySet ? `已配置：${s.difyKeyMasked}（重填即覆盖）` : '尚未填写 —— 问诊不会走 Dify 工作流';
   $('#setOrchKeyNow').textContent = s.orchKeySet ? `已配置：${s.orchKeyMasked}（来源：${s.orchKeyFrom === 'config' ? 'config.json 的 tcm.orchestrator' : 'credentials.json 的 deepseek'}）` : '尚未填写 —— 工具编排不可用（问诊仍可进行）';
   $('#setRouteBody').innerHTML = s.routeA

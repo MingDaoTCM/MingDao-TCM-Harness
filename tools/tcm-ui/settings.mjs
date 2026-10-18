@@ -19,7 +19,11 @@ import path from 'node:path';
 export const DEFAULT_DIFY_BASE = 'https://dify.mingdaotcm.cn';
 /** 编排判定模型（provider 里 decide() 用它；默认 DeepSeek） */
 export const DEFAULT_ORCH_BASE = 'https://api.deepseek.com/v1';
-export const DEFAULT_ORCH_MODEL = 'deepseek-chat';
+// ⚠ 只是**最后兜底**，不是"官方名称"——真正的可选模型以服务商 /models 接口为准
+//   （内核 model-discovery 的 fetchProviderModels）。2026-10 实测 DeepSeek 只返回
+//   `deepseek-flash` 与 `deepseek-v4-pro`，`deepseek-chat` 这个老名字早已不在其中 ✗。
+//   设置页的模型名是**从 API 拉的下拉框**，用户选的永远是线上真实存在的 ID。
+export const DEFAULT_ORCH_MODEL = 'deepseek-flash';
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
 
@@ -136,4 +140,19 @@ export function writeSettings(home, input = {}) {
     return { ok: false, error: `写入失败：${e?.message || e}` };
   }
   return { ok: true, settings: readSettings(home) };
+}
+
+/**
+ * 编排模型端点的连接信息（**只有服务端用**，不要回给前端）。
+ * 为什么单独一个函数：拉 /models 需要**真 key**，而 readSettings 只回脱敏值（那是给页面的）。
+ * @param {string} home
+ */
+export function orchAuth(home) {
+  const cfg = readJson(path.join(home, 'config.json')) || {};
+  const tcm = cfg.tcm || {};
+  const o = tcm.orchestrator || {};
+  const cred = readJson(path.join(home, 'credentials.json')) || {};
+  const apiKey = String(o.apiKey || cred.deepseek || '').trim();
+  const baseUrl = String(o.baseUrl || DEFAULT_ORCH_BASE).replace(/\/+$/, '');
+  return { baseUrl, apiKey, model: String(o.model || '') };
 }
