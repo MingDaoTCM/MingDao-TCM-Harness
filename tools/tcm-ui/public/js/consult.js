@@ -397,7 +397,41 @@ function initPatientBar() {
   refresh();
 }
 
+
+// ── 3.3 脉象点选：点一下把该字加入脉象，再点取消；**不覆盖**医师手输的内容 ──
+// 实现要点：把输入框按"已点选的 chip + 其余手输文字"重组，而不是简单追加 ——
+// 否则连点两次同一个字会变成"弦弦"，取消时也不好定位。
+function initPulseChips() {
+  const box = $('#pulseChips');
+  const input = $('#f_maixiang');
+  if (!box || !input) return;
+  const chips = [...box.querySelectorAll('.chip')];
+  const sync = () => {
+    const picked = chips.filter((c) => c.classList.contains('on')).map((c) => c.dataset.v);
+    const raw = String(input.value || '');
+    // 去掉之前由 chip 写入的字（逐字判断），保留医师自己敲的
+    const rest = raw.split('').filter((ch) => !chips.some((c) => c.dataset.v === ch) || picked.includes(ch)).join('');
+    const handTyped = raw.split('').filter((ch) => !chips.some((c) => c.dataset.v === ch)).join('');
+    input.value = picked.join('') + handTyped;
+    return rest;
+  };
+  for (const c of chips) {
+    c.onclick = (e) => {
+      e.preventDefault();
+      c.classList.toggle('on');
+      sync();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+  }
+  // 手输时，已选 chip 的状态跟着输入框走（用户删掉某个字，chip 也取消）
+  input.addEventListener('input', () => {
+    const v = String(input.value || '');
+    for (const c of chips) c.classList.toggle('on', v.includes(c.dataset.v));
+  });
+}
+
 export function initConsult() {
+  initPulseChips();
   initPatientBar();
   initDeskChrome();
   // ── 舌象照片 ──

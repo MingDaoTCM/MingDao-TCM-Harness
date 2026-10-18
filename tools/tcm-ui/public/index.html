@@ -44,6 +44,7 @@
       </div>
     </div>
     <aside>
+      <div class="aside-scroll">
       <h3>患者资料</h3>
       <div class="grid">
         <div><label>姓名</label><input id="pName" type="text" placeholder="张三" /></div>
@@ -115,18 +116,21 @@
         <img id="thumb" alt="舌象预览" />
         <div id="tongueTip" style="font-size:11.5px;color:var(--faint);margin-top:4px"></div>
       </div>
+      <!-- 3.3 脉象点选：脉象是**有限词汇**，点选远快于打字（医师指下所得就那十几种） -->
+      <div class="chips" id="pulseChips"><button type="button" class="chip" data-v="浮">浮</button><button type="button" class="chip" data-v="沉">沉</button><button type="button" class="chip" data-v="迟">迟</button><button type="button" class="chip" data-v="数">数</button><button type="button" class="chip" data-v="虚">虚</button><button type="button" class="chip" data-v="实">实</button><button type="button" class="chip" data-v="滑">滑</button><button type="button" class="chip" data-v="涩">涩</button><button type="button" class="chip" data-v="弦">弦</button><button type="button" class="chip" data-v="细">细</button><button type="button" class="chip" data-v="濡">濡</button><button type="button" class="chip" data-v="紧">紧</button><button type="button" class="chip" data-v="结">结</button><button type="button" class="chip" data-v="代">代</button></div>
       <div class="field"><label>脉象（切诊，医师指下所得）</label><input id="f_maixiang" type="text" placeholder="脉弦细" /></div>
 
       <h3>随访<span class="opt">可选</span></h3>
       <div class="field"><textarea id="f_suifang" placeholder="两周后复诊；嘱记录睡眠日记"></textarea></div>
 
       <!-- 3.4 吸底操作条：主操作常驻屏幕底部，填表时不用滚动去找 -->
+      </div>
+      <!-- 操作条在滚动区**之外**：任何滚动位置都常驻（sticky 只能"滚到时钉住"，不够） -->
       <div class="actbar" id="actbar">
         <div class="actcount" id="actCount">已填 0 项</div>
         <div class="row">
           <button class="primary" id="directSend" style="flex:1">直接问诊（合成并发送）</button>
         </div>
-      </div>
       <div class="row" style="margin-top:8px">
         <button class="ghost" id="compose" style="flex:1">合成到输入框（先改再发）</button>
         <button class="ghost" id="clearForm">清空</button>
@@ -135,6 +139,7 @@
         <b>直接问诊</b>把上面填的内容合成一条消息立刻发出（少两步点击）；
         想先改措辞就用「合成到输入框」。两种方式都只是把你的原文整理成条理，
         <b>不会替你做任何临床判断</b>。
+      </div>
       </div>
     </aside>
 
