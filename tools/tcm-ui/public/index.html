@@ -32,6 +32,17 @@
 <main>
   <!-- ══════════════════════ 问诊 ══════════════════════ -->
   <div class="view" id="view-consult">
+    <!-- 3.1 患者条：任何时刻只看这一行就知道"我在看谁、第几次"（用现有 /api/tcm/patients，无新端点）。
+         放在视图第一项 + .patbar-wrap 独占一行（.view 是 flex 横排，直接塞会变成第三列 ✗）。-->
+    <div class="patbar-wrap">
+      <div class="patbar" id="patbar">
+        <span class="pn" id="patName">未填写患者</span>
+        <span class="pm" id="patMeta">填写姓名与出生年后自动识别</span>
+        <span class="sp"></span>
+        <button class="ghost sm" id="patSwap">换人</button>
+        <button class="ghost sm" id="patNew">新建</button>
+      </div>
+    </div>
     <aside>
       <h3>患者资料</h3>
       <div class="grid">

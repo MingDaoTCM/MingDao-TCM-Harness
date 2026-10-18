@@ -366,7 +366,39 @@ function initDeskChrome() {
   refresh();
 }
 
+
+// ── 3.1 患者条：填了姓名/出生年就自动识别是首诊还是第 N 次复诊（**不加新端点**，用现有患者册）──
+function initPatientBar() {
+  const pn = $('#patName'), pm = $('#patMeta');
+  if (!pn || !pm) return;
+  const nameEl = $('#pName'), birthEl = $('#pBirth'), sexEl = $('#pSex');
+  const rel = (d) => (d == null ? '—' : d === 0 ? '今天' : d === 1 ? '昨天' : `${d} 天前`);
+  let timer = null;
+  const refresh = async () => {
+    const name = String(nameEl?.value || '').trim();
+    const birth = String(birthEl?.value || '').replace(/\D/g, '').slice(0, 4);
+    const sex = String(sexEl?.value || '').trim();
+    if (!name) { pn.textContent = '未填写患者'; pm.textContent = '填写姓名与出生年后自动识别'; return; }
+    pn.textContent = name + (sex ? ' · ' + sex : '') + (birth ? ' · ' + birth + ' 年生' : '');
+    pm.textContent = '识别中…';
+    try {
+      const r = await fetch('/api/tcm/patients', { cache: 'no-store' });
+      const j = await r.json();
+      const hit = (j.patients || []).find((p) => p.name === name && (!birth || String(p.birth || '') === birth));
+      if (hit) pm.innerHTML = `第 <b>${(hit.visits || 0) + 1}</b> 次就诊 · 上次 ${rel(hit.daysSince)}`;
+      else pm.textContent = '患者册里没有 → 本次按首诊处理';
+    } catch { pm.textContent = ''; }
+  };
+  const debounce = () => { clearTimeout(timer); timer = setTimeout(refresh, 400); };
+  for (const el of [nameEl, birthEl, sexEl]) if (el) { el.addEventListener('input', debounce); el.addEventListener('change', debounce); }
+  const swap = $('#patSwap'), pnew = $('#patNew');
+  if (swap) swap.onclick = () => document.querySelector('.tab[data-view="patients"]')?.click();
+  if (pnew) pnew.onclick = () => { const c = $('#clearForm'); if (c) c.click(); setTimeout(refresh, 50); };
+  refresh();
+}
+
 export function initConsult() {
+  initPatientBar();
   initDeskChrome();
   // ── 舌象照片 ──
   /** 统一入口：拍照与选图**走同一条附件链路**（内核只看 dataUrl，不关心来源） */
