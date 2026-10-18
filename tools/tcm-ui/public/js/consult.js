@@ -340,7 +340,60 @@ async function demo() {
 }
 
 /** 绑定问诊视图的所有交互。由 app.js 在启动时调用一次。 */
+
+// ── 3.4 吸底操作条计数 + 3.1 患者条识别（**不加新端点**：用现有 /api/tcm/patients）──
+function initDeskChrome() {
+  const bar = $('#actCount');
+  const form = $('#view-consult');
+  if (bar && form) {
+    const fields = [...form.querySelectorAll('input[type=text], textarea')].filter((el) => !el.id.startsWith('set'));
+    const upd = () => {
+      const filled = fields.filter((el) => String(el.value || '').trim()).length;
+      bar.textContent = `已填 ${filled} / ${fields.length} 项`;
+      // 必填缺项时主按钮变灰并要求就地提示（3.4 验收）
+      const req = ['#f_zhushu', '#f_xianbingshi'].map((sel) => $(sel)).filter(Boolean);
+      const missing = req.filter((el) => !String(el.value || '').trim());
+      const btn = $('#directSend');
+      if (btn) {
+        btn.disabled = missing.length > 0;
+        btn.title = missing.length ? '还缺：主诉 / 现病史（必填）' : '合成并立即发送';
+      }
+    };
+    form.addEventListener('input', upd);
+    setTimeout(upd, 300);
+  }
+
+  // 患者条：填了姓名/出生年就自动识别是首诊还是第 N 次复诊
+  const nameEl = $('#pName'), birthEl = $('#pBirth'), sexEl = $('#pSex');
+  const pn = $('#patName'), pm = $('#patMeta');
+  let timer = null;
+  const rel = (d) => (d == null ? '—' : d === 0 ? '今天' : d === 1 ? '昨天' : `${d} 天前`);
+  const refresh = async () => {
+    if (!pn || !pm) return;
+    const name = String(nameEl?.value || '').trim();
+    const birth = String(birthEl?.value || '').replace(/\D/g, '').slice(0, 4);
+    const sex = String(sexEl?.value || '').trim();
+    if (!name) { pn.textContent = '未填写患者'; pm.textContent = '填写姓名与出生年后自动识别'; return; }
+    pn.textContent = name + (sex ? ' · ' + sex : '') + (birth ? ' · ' + birth + ' 年生' : '');
+    pm.textContent = '识别中…';
+    try {
+      const r = await fetch('/api/tcm/patients', { cache: 'no-store' });
+      const j = await r.json();
+      const hit = (j.patients || []).find((p) => p.name === name && (!birth || String(p.birth || '') === birth));
+      if (hit) pm.innerHTML = `第 <b>${(hit.visits || 0) + 1}</b> 次就诊 · 上次 ${rel(hit.daysSince)}`;
+      else pm.textContent = '患者册里没有 → 本次按首诊处理';
+    } catch { pm.textContent = ''; }
+  };
+  const debounce = () => { clearTimeout(timer); timer = setTimeout(refresh, 400); };
+  for (const el of [nameEl, birthEl, sexEl]) if (el) { el.addEventListener('input', debounce); el.addEventListener('change', debounce); }
+  const swap = $('#patSwap'), pnew = $('#patNew');
+  if (swap) swap.onclick = () => document.querySelector('.tab[data-view="patients"]')?.click();
+  if (pnew) pnew.onclick = () => { const c = $('#clearForm'); if (c) c.click(); refresh(); };
+  refresh();
+}
+
 export function initConsult() {
+  initDeskChrome();
   // ── 舌象照片 ──
   /** 统一入口：拍照与选图**走同一条附件链路**（内核只看 dataUrl，不关心来源） */
   const attachImage = (dataUrl, name) => {

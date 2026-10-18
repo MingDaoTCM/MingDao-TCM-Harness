@@ -24,7 +24,23 @@ export function setView(name) {
 function init() {
   document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => setView(t.dataset.view); });
 
-  initConsult();
+  
+// ── 3.5 字号档位：整站缩放（Electron/Chromium 支持 zoom，一处生效、完整覆盖）──
+// 为什么不做逐条改 px：界面里有上百处字号，逐条改既容易漏、也难保一致性；
+// 医师要的是"整体大一号"，不是"某几处变大"。用 zoom 一次覆盖，标准/大两档足够。
+function applyFontSize() {
+  const large = localStorage.getItem('tcmFs') === 'large';
+  document.body.classList.toggle('fs-large', large);
+  const b = document.getElementById('fsToggle');
+  if (b) b.textContent = large ? '字号：大' : '字号：标准';
+}
+applyFontSize();
+initConsult();
+const fsBtn = document.getElementById('fsToggle');
+if (fsBtn) fsBtn.onclick = () => {
+  localStorage.setItem('tcmFs', localStorage.getItem('tcmFs') === 'large' ? 'standard' : 'large');
+  applyFontSize();
+};
   initSettings();
   initPatients({
     // 「发起复诊」：切回问诊页，把**服务端生成的**复诊草稿填进输入框（医师可再编辑）

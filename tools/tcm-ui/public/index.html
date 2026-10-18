@@ -16,6 +16,7 @@
   </nav>
   <span class="tag">独立前端 · 薄代理（内核零改动）</span>
   <span class="sp"></span>
+<button class="ghost sm" id="fsToggle" title="字号：标准 / 大">字号</button>
   <span class="st" id="st">未连接</span>
 </header>
 
@@ -108,8 +109,12 @@
       <h3>随访<span class="opt">可选</span></h3>
       <div class="field"><textarea id="f_suifang" placeholder="两周后复诊；嘱记录睡眠日记"></textarea></div>
 
-      <div class="row">
-        <button class="primary" id="directSend" style="flex:1">直接问诊（合成并发送）</button>
+      <!-- 3.4 吸底操作条：主操作常驻屏幕底部，填表时不用滚动去找 -->
+      <div class="actbar" id="actbar">
+        <div class="actcount" id="actCount">已填 0 项</div>
+        <div class="row">
+          <button class="primary" id="directSend" style="flex:1">直接问诊（合成并发送）</button>
+        </div>
       </div>
       <div class="row" style="margin-top:8px">
         <button class="ghost" id="compose" style="flex:1">合成到输入框（先改再发）</button>
@@ -122,6 +127,14 @@
       </div>
     </aside>
 
+    <!-- 3.1 患者条：任何时刻只看这一行就知道"我在看谁、第几次"（只需现有患者册数据，无新端点）-->
+    <div class="patbar" id="patbar">
+      <span class="pn" id="patName">未填写患者</span>
+      <span class="pm" id="patMeta">填写姓名与出生年后自动识别</span>
+      <span class="sp"></span>
+      <button class="ghost" id="patSwap" style="padding:3px 12px">换人</button>
+      <button class="ghost" id="patNew" style="padding:3px 12px">新建</button>
+    </div>
     <section class="chat">
       <div class="conv" id="conv"></div>
       <div class="composer">
