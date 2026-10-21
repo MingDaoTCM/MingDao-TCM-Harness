@@ -272,3 +272,7 @@ button.sm{padding:3px 9px;font-size:12px}
      于是操作条只是排在内容末尾、并不贴底 ✗。只作用于问诊视图，不影响患者页/设置页的整页滚动。 */
   #view-consult{height:calc(100vh - 104px);min-height:0}
   #view-consult>aside{height:100%}
+
+  /* 3.2 复诊对比：每个字段下方的"上次值"，只读、浅色、不抢主输入 */
+  .lastvis{margin:4px 0 0;padding:3px 8px;font-size:12px;color:var(--faint);
+    border-left:2px solid var(--line);background:rgba(255,255,255,.02);border-radius:0 4px 4px 0}

@@ -387,6 +387,8 @@ function initPatientBar() {
       const hit = (j.patients || []).find((p) => p.name === name && (!birth || String(p.birth || '') === birth));
       if (hit) pm.innerHTML = `第 <b>${(hit.visits || 0) + 1}</b> 次就诊 · 上次 ${rel(hit.daysSince)}`;
       else pm.textContent = '患者册里没有 → 本次按首诊处理';
+      // 3.2 复诊对比：是复诊就把"上次各字段的值"直接摆到每个字段下面（不离开诊台）
+      await fillLastVisitHints(hit ? hit.id : null);
     } catch { pm.textContent = ''; }
   };
   const debounce = () => { clearTimeout(timer); timer = setTimeout(refresh, 400); };
@@ -428,6 +430,40 @@ function initPulseChips() {
     const v = String(input.value || '');
     for (const c of chips) c.classList.toggle('on', v.includes(c.dataset.v));
   });
+}
+
+
+// ── 3.2 复诊对比常驻：把"上次各字段的值"摆到对应字段下方（只读、不参与提交）──
+// 为什么要放在诊台里：复诊的核心动作是"这次和上次比"，而这个动作每天重复十几次；
+// 原先要先离开诊台去患者页翻历史再回来 ✗（见 docs/DESIGN-UI-v1-tcm.md §3.2）。
+// 数据来自现有 patientDetail（visits[].items[]），不新增端点。
+async function fillLastVisitHints(patientId) {
+  const host = document.querySelector('#view-consult .aside-scroll') || document;
+  // 先清掉上一次的提示（换患者/清空时必须清，否则会张冠李戴）
+  host.querySelectorAll('.lastvis').forEach((e) => e.remove());
+  if (!patientId) return;
+  let d;
+  try {
+    const r = await fetch('/api/tcm/patients/' + encodeURIComponent(patientId), { cache: 'no-store' });
+    d = await r.json();
+  } catch { return; }
+  if (!d || !d.ok || !Array.isArray(d.visits) || !d.visits.length) return;
+  const last = d.visits[d.visits.length - 1];
+  const at = last.at || '';
+  for (const it of last.items || []) {
+    const v = String(it.value || '').trim();
+    if (!v) continue;
+    const input = document.getElementById('f_' + it.key);
+    if (!input) continue;
+    const hint = document.createElement('div');
+    hint.className = 'lastvis';
+    // 截断：现病史这类字段上次可能三四百字，整段铺在字段下方会撑爆界面 ✗。
+    // 显示前 90 字，完整原文放 title（悬停可看），并且不参与提交。
+    const short = v.length > 90 ? v.slice(0, 90) + '…' : v;
+    hint.textContent = '上次' + (at ? '（' + at + '）' : '') + '：' + short;
+    if (v.length > 90) hint.title = '上次完整内容：\n' + v;
+    (input.closest('.field') || input.parentElement).appendChild(hint);
+  }
 }
 
 export function initConsult() {
