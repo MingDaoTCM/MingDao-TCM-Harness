@@ -363,7 +363,6 @@ function initDeskChrome() {
     setTimeout(upd, 300);
   }
 
-  refresh();
 }
 
 
@@ -467,9 +466,13 @@ async function fillLastVisitHints(patientId) {
 }
 
 export function initConsult() {
-  initPulseChips();
-  initPatientBar();
-  initDeskChrome();
+  // ⚠ 每个分区独立 try/catch：2026-10-21 实测教训 —— initDeskChrome 里一处
+  // `refresh is not defined` 抛错，导致**后面所有绑定都没执行** ✗，
+  // 用户看到的是"拍照/选图/重拍/移除 四个按钮全无响应"（表面症状离病因很远）。
+  // 现在一块坏了只影响那一块，并且**大声报出来**，不静默。
+  for (const [name, fn] of [['脉象 chip', initPulseChips], ['患者条', initPatientBar], ['吸底计数', initDeskChrome]]) {
+    try { fn(); } catch (e) { console.error('[consult] ' + name + ' 初始化失败：', e); }
+  }
   // ── 舌象照片 ──
   /** 统一入口：拍照与选图**走同一条附件链路**（内核只看 dataUrl，不关心来源） */
   const attachImage = (dataUrl, name) => {

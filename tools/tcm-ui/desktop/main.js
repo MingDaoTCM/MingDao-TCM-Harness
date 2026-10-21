@@ -144,7 +144,12 @@ async function initAutoUpdate() {
         detail: '重启应用即可生效。选择「稍后」则本次退出时自动安装。',
         buttons: ['立即重启并更新', '稍后'], defaultId: 0, cancelId: 1,
       }).then((r) => {
-        if (r?.response === 0) { try { updater.quitAndInstall(); } catch (/** @type {any} */ e) { console.warn('[update] 安装失败：' + (e?.message || e)); } }
+        if (r?.response === 0) {
+          try {
+            hardQuitForUpdate();   // 先销毁窗口 + 兜底 exit —— Windows "无法关闭"的根因
+            updater.quitAndInstall(false, true);
+          } catch (/** @type {any} */ e) { console.warn('[update] 安装失败：' + (e?.message || e)); }
+        }
       }).catch(() => {});
     });
     // 检查阶段没有 UI 反馈，必须有超时兜底（上游设的是 30 秒）
@@ -201,6 +206,21 @@ function downloadInstaller(url, name, onProgress) {
 }
 
 /** 按平台给一句"下一步怎么做"——安装方式各平台不同，含糊其辞等于没帮上忙 */
+/** 更新安装期间置 true：此时关闭窗口/退出都按"正在安装"处理，不再拦 */
+let quittingForUpdate = false;
+
+/**
+ * 真正让应用退出，好让安装程序接管。
+ * Windows 上实测安装器提示「Mingdao TCM 无法关闭，请手动关闭后重试」✗ ——
+ * 因为 quitAndInstall() 内部走 app.quit()，主进程还有窗口/异步收尾时退出会被拖住，
+ * 安装器等到超时就弹这句话。做法：先销毁所有窗口，再兜底强制 exit。
+ */
+function hardQuitForUpdate(delayMs = 8000) {
+  quittingForUpdate = true;
+  try { for (const w of BrowserWindow.getAllWindows()) { try { w.destroy(); } catch { /* 忽略 */ } } } catch { /* 忽略 */ }
+  setTimeout(() => { try { app.exit(0); } catch { /* 忽略 */ } }, delayMs).unref?.();
+}
+
 function installHint(dest) {
   if (process.platform === 'darwin') return `已下载到：\n${dest}\n\n将打开 dmg，把「明道中医」拖进「应用程序」覆盖旧版即可。`;
   if (process.platform === 'win32') return `已下载到：\n${dest}\n\n将启动安装程序，按提示完成后重启应用。`;
@@ -217,6 +237,36 @@ const showBox = (/** @type {any} */ opts) => dialog.showMessageBox(win ?? undefi
  *  所以 `update-available` 之后**什么都不会发生**：用户实测"Windows/macOS 能自动更新、
  *  Linux 不能"就是这个。deb 走这里下载并打开系统安装器（装 deb 要提权，做不到全静默，
  *  但"点一下就装"和"自己去网页找"是两回事）。 */
+/**
+ * 用 pkexec 装 deb，然后自重启（=「重启即安装完成」）。
+ * 返回 true 表示已接管（成功启动安装流程），调用方不要再打开安装器。
+ */
+async function installDebAndRestart(/** @type {string} */ debPath) {
+  const { spawn } = await import('node:child_process');
+  return await new Promise((resolve) => {
+    let p;
+    try {
+      p = spawn('pkexec', ['dpkg', '-i', debPath], { stdio: 'ignore' });
+    } catch { resolve(false); return; }
+    let done = false;
+    p.on('error', () => { if (!done) { done = true; resolve(false); } });
+    p.on('exit', (code) => {
+      if (done) return;
+      done = true;
+      if (code === 0) {
+        console.log('[update] deb 安装完成，重启应用');
+        try { app.relaunch(); } catch { /* 忽略 */ }
+        hardQuitForUpdate(1500);
+        resolve(true);
+      } else {
+        console.warn('[update] pkexec/dpkg 退出码 ' + code + '（改用打开安装器）');
+        resolve(false);
+      }
+    });
+  });
+}
+
+
 async function installFromSite(/** @type {string} */ latest, /** @type {string} */ cur) {
   let name = '';
   try {
@@ -240,6 +290,13 @@ async function installFromSite(/** @type {string} */ latest, /** @type {string} 
       (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } });
     win?.setProgressBar(-1);
     await showBox({ type: 'info', title: '更新已下载', message: `v${latest} 已下载完成`, detail: installHint(dest) });
+    // Linux/deb：直接静默安装并自重启（用户要求对齐上游「重启即安装完成」）。
+    // deb 需要 root：用 pkexec 弹一次图形提权，装完 relaunch 即新版；
+    // pkexec 不可用（无 polkit 的极简桌面）才退回「打开安装器」。
+    if (process.platform === 'linux' && /\.deb$/i.test(dest)) {
+      const ok = await installDebAndRestart(dest);
+      if (ok) return;
+    }
     const err = await shell.openPath(dest);
     if (err) { console.warn('[update] 打开安装包失败：' + err); openExternal(`${SITE_URL}/`); }
   } catch (/** @type {any} */ e) {

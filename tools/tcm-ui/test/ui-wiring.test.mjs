@@ -129,5 +129,6 @@ test('★ B-001：变焦两条路都在（硬件优先、数字兜底）+ 采集
   }
 });
 
+
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);
 process.exit(failed ? 1 : 0);
