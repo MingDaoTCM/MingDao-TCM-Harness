@@ -465,12 +465,35 @@ async function fillLastVisitHints(patientId) {
   }
 }
 
+
+// ── 舌象：4 个下拉 + 补充 → 合成到 pack 原有的 shexiang 一项 ──
+// 术语是有限词汇（舌质/舌苔/舌形态/舌下络脉），下拉比打字快且不会写错别字；
+// 但数据模型不变：pack 那边仍然只收到一个 shexiang 字符串。
+function initTongueSelects() {
+  const parts = [
+    ['sheZhi', '舌质'], ['sheTai', '舌苔'], ['sheXing', '舌形/态舌'], ['sheLuo', '舌下络脉'],
+  ].map(([id, label]) => ({ el: document.getElementById(id), label }));
+  const note = document.getElementById('sheNote');
+  const out = document.getElementById('f_shexiang');
+  if (!out || !parts.every((p) => p.el)) return;
+  const sync = () => {
+    const seg = parts.filter((p) => String(p.el.value || '').trim()).map((p) => p.label + p.el.value.trim());
+    const extra = String(note?.value || '').trim();
+    const text = seg.join('；') + (extra ? (seg.length ? '；补充：' : '补充：') + extra : '');
+    out.value = text;
+    out.dispatchEvent(new Event('input', { bubbles: true }));   // 让吸底计数与必填校验看到变化
+  };
+  for (const p of parts) { p.el.addEventListener('change', sync); }
+  if (note) note.addEventListener('input', sync);
+  sync();
+}
+
 export function initConsult() {
   // ⚠ 每个分区独立 try/catch：2026-10-21 实测教训 —— initDeskChrome 里一处
   // `refresh is not defined` 抛错，导致**后面所有绑定都没执行** ✗，
   // 用户看到的是"拍照/选图/重拍/移除 四个按钮全无响应"（表面症状离病因很远）。
   // 现在一块坏了只影响那一块，并且**大声报出来**，不静默。
-  for (const [name, fn] of [['脉象 chip', initPulseChips], ['患者条', initPatientBar], ['吸底计数', initDeskChrome]]) {
+  for (const [name, fn] of [['脉象 chip', initPulseChips], ['患者条', initPatientBar], ['吸底计数', initDeskChrome], ['舌象下拉', initTongueSelects]]) {
     try { fn(); } catch (e) { console.error('[consult] ' + name + ' 初始化失败：', e); }
   }
   // ── 舌象照片 ──

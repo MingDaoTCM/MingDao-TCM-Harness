@@ -237,35 +237,6 @@ const showBox = (/** @type {any} */ opts) => dialog.showMessageBox(win ?? undefi
  *  所以 `update-available` 之后**什么都不会发生**：用户实测"Windows/macOS 能自动更新、
  *  Linux 不能"就是这个。deb 走这里下载并打开系统安装器（装 deb 要提权，做不到全静默，
  *  但"点一下就装"和"自己去网页找"是两回事）。 */
-/**
- * 用 pkexec 装 deb，然后自重启（=「重启即安装完成」）。
- * 返回 true 表示已接管（成功启动安装流程），调用方不要再打开安装器。
- */
-async function installDebAndRestart(/** @type {string} */ debPath) {
-  const { spawn } = await import('node:child_process');
-  return await new Promise((resolve) => {
-    let p;
-    try {
-      p = spawn('pkexec', ['dpkg', '-i', debPath], { stdio: 'ignore' });
-    } catch { resolve(false); return; }
-    let done = false;
-    p.on('error', () => { if (!done) { done = true; resolve(false); } });
-    p.on('exit', (code) => {
-      if (done) return;
-      done = true;
-      if (code === 0) {
-        console.log('[update] deb 安装完成，重启应用');
-        try { app.relaunch(); } catch { /* 忽略 */ }
-        hardQuitForUpdate(1500);
-        resolve(true);
-      } else {
-        console.warn('[update] pkexec/dpkg 退出码 ' + code + '（改用打开安装器）');
-        resolve(false);
-      }
-    });
-  });
-}
-
 
 async function installFromSite(/** @type {string} */ latest, /** @type {string} */ cur) {
   let name = '';
@@ -290,12 +261,27 @@ async function installFromSite(/** @type {string} */ latest, /** @type {string} 
       (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } });
     win?.setProgressBar(-1);
     await showBox({ type: 'info', title: '更新已下载', message: `v${latest} 已下载完成`, detail: installHint(dest) });
-    // Linux/deb：直接静默安装并自重启（用户要求对齐上游「重启即安装完成」）。
-    // deb 需要 root：用 pkexec 弹一次图形提权，装完 relaunch 即新版；
-    // pkexec 不可用（无 polkit 的极简桌面）才退回「打开安装器」。
+    // Linux/deb：**deb 形态无法免密码自动更新**（装到 /opt 要提权）。
+    // 上游 MingDao Harness 同样是这个结论：deb 只提示去官网下载。
+    // 真正「下载后重启即更新、无需密码」的是 **AppImage 形态**（electron-updater 就地换包）。
+    // 所以这里不弹提权，而是明确引导换成 AppImage（换一次，之后永久免密码）。
     if (process.platform === 'linux' && /\.deb$/i.test(dest)) {
-      const ok = await installDebAndRestart(dest);
-      if (ok) return;
+      const x = await showBox({
+        type: 'info', title: '更新已就绪（deb 形态）',
+        message: `v${latest} 已下载，但 deb 安装包需要系统权限才能装`,
+        detail: [
+          'deb 形态无法做到「下载后重启即更新、无需密码」——安装到 /opt 必须提权，这是安装形态决定的。',
+          '',
+          '上游 MingDao Harness 桌面版的做法相同：deb 只提示到官网下载。',
+          '',
+          '免密码自动更新的唯一形态是 AppImage：应用放在你自己的目录里，更新时就地替换，重启即新版。',
+          '建议现在换成 AppImage（只需换这一次），之后的更新都不再需要密码。',
+        ].join('\n'),
+        buttons: ['下载 AppImage', '打开 deb 安装包', '稍后'], defaultId: 0, cancelId: 2,
+      });
+      if (x?.response === 0) openExternal(`${SITE_URL}/`);
+      else if (x?.response === 1) { try { await shell.openPath(dest); } catch { /* 忽略 */ } }
+      return;
     }
     const err = await shell.openPath(dest);
     if (err) { console.warn('[update] 打开安装包失败：' + err); openExternal(`${SITE_URL}/`); }

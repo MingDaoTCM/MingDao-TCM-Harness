@@ -77,7 +77,19 @@
       <div class="field"><textarea id="f_tigejiancha" placeholder="T 36.5℃ P 78次/分 R 18次/分 BP 138/86mmHg"></textarea></div>
 
       <h3>四诊 · 舌象 / 脉象<span class="opt">可选</span></h3>
-      <div class="field"><label>舌象（望诊）</label><input id="f_shexiang" type="text" placeholder="舌红苔黄" /></div>
+      <!-- 舌象：**4 个下拉 + 1 个补充**（用户 2026-10-21 指定）。
+           四诊术语是有限词汇，下拉远快于打字，也不会写错别字；
+           最终仍合成到 pack 原有的 shexiang 一项（数据模型不变，只是录入方式变了）。 -->
+      <div class="field"><label>舌质</label>
+        <select id="sheZhi"><option value="">—</option><option value="淡红">淡红</option><option value="淡白">淡白</option><option value="红">红</option><option value="绛">绛</option><option value="紫暗">紫暗</option><option value="青">青</option><option value="淡胖">淡胖</option><option value="瘦薄">瘦薄</option></select></div>
+      <div class="field"><label>舌苔</label>
+        <select id="sheTai"><option value="">—</option><option value="薄白">薄白</option><option value="薄黄">薄黄</option><option value="白腻">白腻</option><option value="黄腻">黄腻</option><option value="白滑">白滑</option><option value="少苔">少苔</option><option value="无苔">无苔</option><option value="剥苔">剥苔</option><option value="厚腻">厚腻</option></select></div>
+      <div class="field"><label>舌形/态舌</label>
+        <select id="sheXing"><option value="">—</option><option value="正常">正常</option><option value="胖大">胖大</option><option value="瘦薄">瘦薄</option><option value="齿痕">齿痕</option><option value="裂纹">裂纹</option><option value="强硬">强硬</option><option value="痿软">痿软</option><option value="震颤">震颤</option><option value="歪斜">歪斜</option></select></div>
+      <div class="field"><label>舌下络脉</label>
+        <select id="sheLuo"><option value="">—</option><option value="正常">正常</option><option value="迂曲">迂曲</option><option value="青紫">青紫</option><option value="粗胀">粗胀</option><option value="细小">细小</option></select></div>
+      <div class="field"><label>舌诊补充</label><input id="sheNote" type="text" placeholder="如：舌边尖红、苔润、伸舌偏斜…" /></div>
+      <input id="f_shexiang" type="hidden" />
       <div class="field">
         <label>舌象照片（随问诊一起交给 Dify；Dify 侧需开启视觉）</label>
         <div class="row" style="margin:0 0 6px">
