@@ -284,3 +284,12 @@ button.sm{padding:3px 9px;font-size:12px}
   .sendnote{margin:12px 0 0;font-size:12.5px;color:var(--faint)}
   .sendnote>summary{cursor:pointer;color:var(--cyan);margin-bottom:4px}
   .sendnote[open]>summary{margin-bottom:6px}
+
+  /* 3.7 空态三步引导：只在没有消息时出现 */
+  .startHere{margin:18px 4px;padding:16px 18px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;max-width:760px}
+  .startHere .sh-title{font-size:14.5px;font-weight:600;color:var(--tx);margin-bottom:10px}
+  .sh-steps{margin:0;padding-left:20px;color:var(--dim);font-size:13.5px;line-height:1.9}
+  .sh-steps b{color:var(--tx)}
+  .sh-keys{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--faint)}
+  .sh-keys kbd{background:var(--panel);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;
+    padding:1px 6px;font-size:11.5px;color:var(--dim);font-family:inherit}

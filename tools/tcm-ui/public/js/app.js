@@ -34,7 +34,36 @@ function applyFontSize() {
   const b = document.getElementById('fsToggle');
   if (b) b.textContent = large ? '字号：大' : '字号：标准';
 }
+// ── 键盘优先（3.8）：医师熟手用键盘走完一次问诊 ──
+// Ctrl/⌘+Enter 直接问诊 · Ctrl/⌘+K 换患者 · Ctrl/⌘+L 拍照
+// 只在组合键时生效，不拦普通按键，避免和输入法/系统快捷键打架。
+function initShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = String(e.key || '').toLowerCase();
+    if (key === 'enter') {
+      const b = document.getElementById('directSend');
+      if (b && !b.disabled) { e.preventDefault(); b.click(); }
+      return;
+    }
+    if (key === 'k') { e.preventDefault(); document.querySelector('.tab[data-view="patients"]')?.click(); return; }
+    if (key === 'l') { e.preventDefault(); document.getElementById('tongueShot')?.click(); return; }
+  });
+}
+
+// 3.7 空态引导：发出第一条消息后隐藏（用观察器，和渲染逻辑解耦）
+function initStartHere() {
+  const box = document.getElementById('startHere');
+  const conv = document.getElementById('conv');
+  if (!box || !conv || typeof MutationObserver === 'undefined') return;
+  const upd = () => { if (conv.children.length > 0) box.style.display = 'none'; };
+  new MutationObserver(upd).observe(conv, { childList: true });
+  upd();
+}
+
 applyFontSize();
+initShortcuts();
+initStartHere();
 initConsult();
 const fsBtn = document.getElementById('fsToggle');
 if (fsBtn) fsBtn.onclick = () => {

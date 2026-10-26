@@ -158,6 +158,17 @@
     </aside>
 
     <section class="chat">
+      <!-- 3.7 空态三步引导：新用户第一次打开时告诉他"从哪开始"（发了第一条消息后自动隐藏）。
+           顺带把快捷键写在这里，医师不必去翻文档。 -->
+      <div class="startHere" id="startHere">
+        <div class="sh-title">从这里开始</div>
+        <ol class="sh-steps">
+          <li><b>填患者与主诉</b>（左侧）—— 主诉与现病史为必填</li>
+          <li><b>拍舌象</b>（可选）—— 中医最有信息量的一步，可拍照或选图</li>
+          <li><b>点「直接问诊」</b> —— 填的内容会合成一条消息发出；想先改措辞就用「合成」</li>
+        </ol>
+        <div class="sh-keys">快捷键：<kbd>Ctrl/⌘ + Enter</kbd> 直接问诊 · <kbd>Ctrl/⌘ + K</kbd> 换患者 · <kbd>Ctrl/⌘ + L</kbd> 拍照</div>
+      </div>
       <div class="conv" id="conv"></div>
       <div class="composer">
         <textarea id="input" placeholder="直接描述病情，或先在左侧填表后点「合成问诊消息」（Enter 发送 / Shift+Enter 换行）"></textarea>
