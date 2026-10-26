@@ -138,20 +138,22 @@
       <!-- 3.4 吸底操作条：主操作常驻屏幕底部，填表时不用滚动去找 -->
       </div>
       <!-- 操作条在滚动区**之外**：任何滚动位置都常驻（sticky 只能"滚到时钉住"，不够） -->
+
+      <!-- 两种发送方式的区别：折叠起来（不占常驻空间，需要时展开） -->
+      <details class="sendnote">
+        <summary>「直接问诊」和「合成到输入框」有什么区别？</summary>
+        <div>前者把上面填的内容合成一条消息**立刻发出**（少两步点击）；后者只合成到输入框，方便你先改措辞。
+        两种方式都只是把你的原文整理成条理，<b>不会替你做任何临床判断</b>。</div>
+      </details>
+      <!-- 操作条：压成**一行**（说明移到表单内的折叠区，见下方 details）——
+           上一版它含 4 行说明、高 196px，约占视口 1/4 ✗。 -->
       <div class="actbar" id="actbar">
-        <div class="actcount" id="actCount">已填 0 项</div>
-        <div class="row">
-          <button class="primary" id="directSend" style="flex:1">直接问诊（合成并发送）</button>
+        <div class="actrow">
+          <span class="actcount" id="actCount">已填 0 项</span>
+          <button class="primary" id="directSend" style="flex:1">直接问诊</button>
+          <button class="ghost" id="compose">合成</button>
+          <button class="ghost" id="clearForm">清空</button>
         </div>
-      <div class="row" style="margin-top:8px">
-        <button class="ghost" id="compose" style="flex:1">合成到输入框（先改再发）</button>
-        <button class="ghost" id="clearForm">清空</button>
-      </div>
-      <div style="font-size:11.5px;color:var(--faint);margin-top:8px">
-        <b>直接问诊</b>把上面填的内容合成一条消息立刻发出（少两步点击）；
-        想先改措辞就用「合成到输入框」。两种方式都只是把你的原文整理成条理，
-        <b>不会替你做任何临床判断</b>。
-      </div>
       </div>
     </aside>
 
