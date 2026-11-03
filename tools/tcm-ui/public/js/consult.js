@@ -347,12 +347,13 @@ function initDeskChrome() {
   const form = $('#view-consult');
   if (bar && form) {
     const fields = [...form.querySelectorAll('input[type=text], textarea')].filter((el) => !el.id.startsWith('set'));
+    const missing2 = () => ['#f_zhushu', '#f_xianbingshi'].map((s2) => $(s2)).filter(Boolean).filter((el) => !String(el.value || '').trim());
     const upd = () => {
       const filled = fields.filter((el) => String(el.value || '').trim()).length;
       bar.textContent = `已填 ${filled} / ${fields.length} 项`;
+      bar.classList.toggle('warn', missing2().length > 0);   // 琥珀 = 需要注意（--warn 语义）
       // 必填缺项时主按钮变灰并要求就地提示（3.4 验收）
-      const req = ['#f_zhushu', '#f_xianbingshi'].map((sel) => $(sel)).filter(Boolean);
-      const missing = req.filter((el) => !String(el.value || '').trim());
+      const missing = missing2();
       const btn = $('#directSend');
       if (btn) {
         btn.disabled = missing.length > 0;

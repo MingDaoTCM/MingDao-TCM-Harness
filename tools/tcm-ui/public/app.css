@@ -3,6 +3,12 @@
   --bg:#0f1216; --panel:#161b22; --panel2:#1c232c; --line:#2a323d;
   --fg:#e6edf3; --dim:#9aa7b4; --faint:#6b7784;
   --accent:#3fb950; --accent2:#58a6ff; --warn:#d29922; --err:#f85149;
+    /* ── 颜色语义（3.6）：新增样式请照此选色 ──
+       --accent  玉青绿：**主操作**与**选中态**（一屏只应有一个主操作）
+       --accent2 蓝   ：信息与链接（可点、但非主操作）
+       --warn    琥珀 ：**需要注意**（必填缺项、模型名过期、待处理提醒）
+       --err     红   ：**阻断**（错误、就医红线命中）
+       --dim/--faint 只用于次要文字，不承担语义。 */
 }
 *{box-sizing:border-box}
 body{
@@ -264,8 +270,8 @@ button.sm{padding:3px 9px;font-size:12px}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
   .chip{background:var(--panel2);border:1px solid var(--line);color:var(--dim);
     border-radius:999px;padding:4px 12px;font-size:13px;cursor:pointer;transition:.15s}
-  .chip:hover{border-color:var(--jade);color:var(--tx)}
-  .chip.on{background:rgba(20,184,166,.16);border-color:var(--jade);color:var(--jade);font-weight:600}
+  .chip:hover{border-color:var(--accent);color:var(--tx)}
+  .chip.on{background:rgba(20,184,166,.16);border-color:var(--accent);color:var(--accent);font-weight:600}
 
   /* 3.4 真常驻的**高度链**：操作条要"永远贴在这列底部"，前提是 aside 的高度 == 视图高度。
      实测（量出来的）：不加这几条时 aside 高 1491 > 视口 900（内容把列撑高了），
@@ -280,6 +286,7 @@ button.sm{padding:3px 9px;font-size:12px}
   /* 操作条内部：一行放下「计数 + 直接问诊 + 合成 + 清空」 */
   .actrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .actrow .actcount{margin:0;font-size:12px;color:var(--dim);white-space:nowrap}
+  .actrow .actcount.warn{color:var(--warn)}
   /* 两种发送方式的说明：折叠，不占常驻空间 */
   .sendnote{margin:12px 0 0;font-size:12.5px;color:var(--faint)}
   .sendnote>summary{cursor:pointer;color:var(--cyan);margin-bottom:4px}
