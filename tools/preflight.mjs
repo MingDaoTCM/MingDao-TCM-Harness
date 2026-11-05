@@ -234,6 +234,21 @@ else {
   }
 }
 
+// ── [7] 运行时冒烟：真实页面点 10 个交互，抓 console.error ──
+// 这是**机制**：过去一个月三次事故（站点下载区崩 / 舌象四按钮失效 / 删块多删花括号）
+// 全都能被它抓到 ✓，而静态分析只抓到过一次 ✗。变异验证过：
+//   删掉 tonguePick 绑定 → 报"没有绑定处理器"；initConsult 注入 throw → 报 console.error。
+{
+  const r = spawnSync(process.execPath, [path.join(REPO, 'tools', 'tcm-ui', 'test', 'runtime-smoke.mjs')], {
+    cwd: REPO, encoding: 'utf8', timeout: 240000, env: { ...process.env },
+  });
+  const out = (String(r.stdout || '') + String(r.stderr || '')).split('\n').map((x) => x.trim()).filter(Boolean);
+  const last = out.length ? out[out.length - 1] : '(无输出)';
+  if (r.status === 0) { pass++; }
+  else if (r.status === 2) { console.log('  － 运行时冒烟已跳过：' + last.replace(/^跳过：/, '')); }
+  else { fail++; failures.push('运行时冒烟：' + last.slice(0, 300)); }
+}
+
 console.log(`\n审计结果：通过 ${pass}，失败 ${fail}`);
 if (fail) { console.log('\n✗ 不允许发版。先修掉上面每一条：\n  ' + failures.join('\n  ') + '\n'); process.exit(1); }
 console.log('\n✓ 可以打 tag。\n');
