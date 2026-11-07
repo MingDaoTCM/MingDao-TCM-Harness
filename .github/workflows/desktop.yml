@@ -49,12 +49,12 @@ jobs:
           - os: windows-latest
             args: --win nsis
             name: win-x64
-          # 与上游同口径：macos-13（Intel）公共池排队数小时，改用 macos-14(arm64) + Rosetta 交叉构建 x64
+          # 与上游同口径：macos-13（Intel）公共池排队数小时，改用 macos-15(arm64) + Rosetta 交叉构建 x64
           # zip 供自动更新（若将来接入），dmg 供手动安装
-          - os: macos-14
+          - os: macos-15
             args: --mac dmg zip --x64
             name: mac-x64
-          - os: macos-14
+          - os: macos-15
             args: --mac dmg zip
             name: mac-arm64
     runs-on: ${{ matrix.os }}
