@@ -721,6 +721,10 @@ export function initConsult() {
   };
 
   $('#clearForm').onclick = () => {
+    // S-1（审计 2026-11）：清空表单 = 换患者 → 必须**同时复位会话** ✗
+    //   否则上一位患者的 Dify 会话上下文会被下一位沿用（隐私跨患者泄露）。
+    session = null;
+    { const h = document.getElementById('hint'); if (h) h.textContent = '每轮回复：上方是工具执行区，下方是问诊工作流正文。'; }
     for (const id of ['f_zhushu', 'f_xianbingshi', ...OPT_FIELDS.map(([k]) => 'f_' + k)]) { const el = $('#' + id); if (el) el.value = ''; }
     for (const id of ['pName', 'pBirth']) $('#' + id).value = '';
     $('#pSex').value = ''; $('#pKind').value = 'auto';

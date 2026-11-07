@@ -37,6 +37,28 @@ function applyFontSize() {
 // ── 键盘优先（3.8）：医师熟手用键盘走完一次问诊 ──
 // Ctrl/⌘+Enter 直接问诊 · Ctrl/⌘+K 换患者 · Ctrl/⌘+L 拍照
 // 只在组合键时生效，不拦普通按键，避免和输入法/系统快捷键打架。
+
+// S-3（审计 2026-11）：后端要求所有**写操作**带 `X-TCM-UI: 1`（跨域带自定义头会触发预检，
+// 本服务不应答 OPTIONS → 恶意网页的请求被浏览器自己拦下）。
+// 在这里统一注入，避免逐个 fetch 去改（也避免以后新加的写请求漏掉）。
+if (typeof window !== 'undefined' && !window.__tcmFetchPatched) {
+  window.__tcmFetchPatched = true;
+  const origFetch = window.fetch.bind(window);
+  window.fetch = (input, init = {}) => {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = String((init && init.method) || 'GET').toUpperCase();
+      if (url.includes('/api/tcm/') && method !== 'GET' && method !== 'HEAD') {
+        const h = new Headers(init.headers || {});
+        h.set('X-TCM-UI', '1');
+        if (!h.has('Content-Type')) h.set('Content-Type', 'application/json');
+        return origFetch(input, { ...init, headers: h });
+      }
+    } catch { /* 落到原始 fetch */ }
+    return origFetch(input, init);
+  };
+}
+
 function initShortcuts() {
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;

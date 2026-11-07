@@ -90,6 +90,18 @@ function validateUrl(name, v) {
  * @returns {{ok:true, settings:any} | {ok:false, error:string}}
  */
 export function writeSettings(home, input = {}) {
+  // H-7（审计 2026-11）：配置**损坏**时，下面的 `readJson(...) || {}` 会把整个文件重写成只剩本次要写的键 ✗
+  // 医师在设置页保存任意一项 → 其余凭据/配置**全部丢失** ✗。
+  // 做法：文件存在但解析失败 → 直接拒绝写入（文件保持原样），让医师先修复或从备份恢复。
+  for (const f of ['config.json', 'credentials.json']) {
+    const fp = path.join(home, f);
+    if (!fs.existsSync(fp)) continue;
+    const raw = fs.readFileSync(fp, 'utf8');
+    if (!raw.trim()) continue;
+    try { JSON.parse(raw); } catch {
+      return { ok: false, error: `配置文件 ${f} 已损坏（JSON 解析失败）—— 为避免覆盖其余键，本次**未写入**。请先修复该文件或从备份恢复。` };
+    }
+  }
   const credPath = path.join(home, 'credentials.json');
   const cfgPath = path.join(home, 'config.json');
   const creds = readJson(credPath) || {};

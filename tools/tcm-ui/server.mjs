@@ -93,6 +93,26 @@ function json(/** @type {any} */ res, code, obj) {
 
 function handleTcm(/** @type {any} */ req, /** @type {any} */ res, /** @type {string} */ home, /** @type {any} */ ctx = {}) {
   const u = new URL(req.url || '/', 'http://localhost');
+  // ── S-3（审计 2026-11）：问诊台 API 原本无鉴权、无 CSRF 防护 ✗ ──
+  // 恶意网页可以让浏览器替你 POST /api/tcm/settings，把 difyBaseUrl 改到攻击者，
+  // 之后每次问诊的**患者对话全文 + Dify Key** 都会发出去 ✗；也能 GET 患者清单。
+  // 四道闸（按审计建议，全部都要）：
+  //   ① Host 必须是本机回环（防 DNS rebinding）
+  //   ② Origin 若存在，必须是本机回环（挡浏览器跨站请求）
+  //   ③ 写操作必须带自定义头 X-TCM-UI: 1 —— 跨域带自定义头会触发预检，本服务不应答 OPTIONS，浏览器直接拦下
+  //   ④ 写操作 Content-Type 必须是 application/json（挡 no-cors 的纯文本/表单攻击）
+  {
+    const hostHdr = String(req.headers.host || '');
+    const originHdr = String(req.headers.origin || '');
+    const loop = (s) => /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(s);
+    if (!loop(hostHdr)) { json(res, 403, { ok: false, error: '只接受本机回环访问' }); return; }
+    if (originHdr && !loop(originHdr.replace(/^https?:\/\//, ''))) { json(res, 403, { ok: false, error: '拒绝跨站来源' }); return; }
+    const isWrite = req.method !== 'GET' && req.method !== 'HEAD';
+    if (isWrite) {
+      if (String(req.headers['x-tcm-ui'] || '') !== '1') { json(res, 403, { ok: false, error: '缺少 X-TCM-UI 头（写操作必须）' }); return; }
+      if (!/^application\/json/i.test(String(req.headers['content-type'] || ''))) { json(res, 415, { ok: false, error: '写操作必须是 application/json' }); return; }
+    }
+  }
   if (!home) {
     json(res, 500, { ok: false, error: '未配置数据目录：用 --home 或环境变量 MINGDAO_HOME / MINGDAO_UI_HOME 指定' });
     return;

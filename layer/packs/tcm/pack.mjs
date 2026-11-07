@@ -148,8 +148,17 @@ export function matchPatient(registry, info = {}) {
   let narrowed = cands;
   const birth = String(info.birth || '').replace(/[^0-9]/g, '').slice(0, 4);
   const sex = String(info.sex || '').trim();
-  if (birth) narrowed = narrowed.filter((p) => String(p.birth || '') === birth);
-  if (sex) narrowed = narrowed.filter((p) => String(p.sex || '') === sex);
+  // S-2（审计 2026-11）：曾把"档案里没录出生年/性别"当成**不匹配** ✗
+  //   → 老患者没录出生年 + 这次带了出生年 → 判 isNew → 按首诊放行 → 同一个人两个号 ✗
+  // 正确语义：**空缺视为通配**，只有双方都非空且不等才排除；剩多个候选交医师确认（ambiguous）。
+  if (birth) narrowed = narrowed.filter((p) => {
+    const pb = String(p.birth || '');
+    return !pb || pb === birth;
+  });
+  if (sex) narrowed = narrowed.filter((p) => {
+    const ps = String(p.sex || '');
+    return !ps || ps === sex;
+  });
   if (narrowed.length === 1) return { patient: narrowed[0] };
   if (narrowed.length === 0) return { isNew: true };
   return { ambiguous: narrowed };

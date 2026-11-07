@@ -102,7 +102,7 @@ await testAsync('★ GET /api/tcm/settings 只回脱敏值；POST 能写入', as
     assert.equal(j.settings.difyKeySet, false);
 
     r = await fetch(ui.url + 'api/tcm/settings', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'X-TCM-UI': '1',  'Content-Type': 'application/json' },
       body: JSON.stringify({ difyKey: 'app-secret-abcdefg', orchKey: 'sk-secret-abcdefg' }),
     });
     j = await r.json();
