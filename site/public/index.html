@@ -267,6 +267,73 @@ function card(g, files) {
 }
 
 
+
+// ── 就近选择（抄 DISTRIBUTION-PLAYBOOK §3.5）──
+// 不依赖 IP 库/时区：页面加载后**并行各取 256KB**，谁先回完用谁；结果记 7 天。
+// 手册没写但必须补的一环：镜像是跨域的 → 它的 /downloads/ 必须回 CORS 头（已在 nginx 加）。
+// 排障开关：?mirror=1 强制镜像、?mirror=0 强制源站。
+(function cloudPickNearest() {
+  const MIRROR = 'https://mingdaotcm.southdns.com';
+  const KEY = 'dl_choice', KEY_AT = 'dl_choice_at';
+  const TTL = 7 * 86400 * 1000;
+  const onMirror = location.hostname === 'mingdaotcm.southdns.com';
+  if (onMirror) return;                       // 已在镜像站：保持相对链接，不再探
+
+  // 结果要**持续应用**：下载卡片是异步 fetch 进来的，只在启动时改写会跑早 ✗（实测：链接没变）。
+  let chosen = null;
+  const apply = (use) => {
+    chosen = use;
+    document.querySelectorAll('a.dbtn[href*="/downloads/"]').forEach((a) => {
+      const p = new URL(a.getAttribute('href'), location.href).pathname;
+      a.setAttribute('href', use === 'mirror' ? MIRROR + p : p);
+    });
+  };
+  const reapply = () => { if (chosen) apply(chosen); };
+  // 卡片渲染完（或以后任何变动）都补一次
+  const grid = document.getElementById('dlGrid');
+  if (grid && typeof MutationObserver !== 'undefined') new MutationObserver(reapply).observe(grid, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', reapply);
+
+  const forced = new URLSearchParams(location.search).get('mirror');
+  if (forced === '1' || forced === '0') {
+    const use = forced === '1' ? 'mirror' : 'origin';
+    try { localStorage.setItem(KEY, use); localStorage.setItem(KEY_AT, String(Date.now())); } catch {}
+    apply(use); return;
+  }
+  try {
+    const at = Number(localStorage.getItem(KEY_AT) || 0);
+    const saved = localStorage.getItem(KEY);
+    if (saved && Date.now() - at < TTL) { apply(saved); return; }
+  } catch { /* 忽略 */ }
+
+  // 探针对象用 latest.yml（361 字节），**不用安装包**：
+  // 在 no-cors 下 Range 是禁止头 ✗，探安装包会变成"下载整个 75MB" ✗；
+  // 小文件探的是**首字节延迟**，足以区分"香港源站 vs 深圳镜像"，且代价可忽略。
+  const sample = '/downloads/latest.yml';
+  if (!sample) return;
+
+  let decided = false;
+  const pick = (r) => {
+    if (decided || !r.ok) return;
+    decided = true;
+    const use = r.base === MIRROR ? 'mirror' : 'origin';
+    try { localStorage.setItem(KEY, use); localStorage.setItem(KEY_AT, String(Date.now())); } catch {}
+    apply(use);
+  };
+  const probe = (base) => new Promise((resolve) => {
+    const t0 = performance.now();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => { ctrl.abort(); resolve({ base, ok: false }); }, 3000);
+    // 用 no-cors：跨域探针**不需要读响应体**，只比"谁先回完"的时序。
+    // 这样连镜像/OSS 的 CORS 配置都不依赖（更少一个会坏的环节）；opaque 响应完成即视为可达。
+    fetch(base + sample, { cache: 'no-store', mode: 'no-cors', signal: ctrl.signal })
+      .then(() => { clearTimeout(timer); resolve({ base, ok: true, ms: performance.now() - t0 }); })
+      .catch(() => { clearTimeout(timer); resolve({ base, ok: false }); });
+  });
+  probe('').then(pick);
+  probe(MIRROR).then(pick);
+})();
+
 // 站点统计：读 /api/stats，填**页尾那 4 张卡**（累计访问 / 累计下载 / 今日下载 / 访客累计）。
 // 数据由宿主 cron 每 5 分钟聚合访问日志；拿不到就整块隐藏 —— 显示 0 会被误读成"真的没人来"。
 (async () => {

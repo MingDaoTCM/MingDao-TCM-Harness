@@ -1,0 +1,105 @@
+name: MirrorSync
+
+# 发布产物 → 对象存储（抄自 DISTRIBUTION-PLAYBOOK §3.1）
+#
+# 为什么**单独一个工作流**（手册原话）：
+#   如果塞进 Desktop 的 publish job 里，前面任何一步红（比如签名 422）都会让它 skipped ✗ ——
+#   上游实际踩过：签名失败 → 直推被跳过 → 又退回本机慢传。
+#   独立工作流即使 Desktop 失败也能单独重跑，互不牵连。
+#
+# 也可由 Desktop 发布成功后自动触发（见 desktop.yml 末尾的 workflow_run，若已加）。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要同步的 tag（如 v0.1.39）'
+        required: true
+        type: string
+  workflow_run:
+    workflows: ['Desktop']
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  sync:
+    # workflow_run 触发时只在 Desktop 成功时跑；手动触发直接跑
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析 tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            T="${{ inputs.tag }}"
+          else
+            # workflow_run 的 head_branch 就是 tag 名（本项目按 tag 发版）
+            T="${{ github.event.workflow_run.head_branch }}"
+          fi
+          case "$T" in v*) ;; *) echo "::error title=tag::不是 tag 形状：$T"; exit 1;; esac
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+          echo "同步 $T"
+
+      - name: 下载 Release 资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${{ steps.tag.outputs.tag }}" -R "${{ github.repository }}" -D dist --clobber || true
+          # 只保留要分发的文件（排除 blockmap/源映射等）
+          find dist -maxdepth 1 -type f ! -name '*.blockmap' ! -name '*.yml' -delete 2>/dev/null || true
+          echo "安装包：$(ls dist | wc -l)"; du -sh dist || true
+
+      - name: 上传到对象存储（逐个文件，带重试）
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}   # CI 用**公网**端点（CI 不在阿里云内网）
+          OSS_AK: ${{ secrets.OSS_AK }}
+          OSS_SK: ${{ secrets.OSS_SK }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OSS_AK:-}" ]; then
+            echo "::error title=secrets::仓库 Secrets 里缺 OSS_AK / OSS_SK / OSS_BUCKET / OSS_ENDPOINT"
+            exit 1
+          fi
+          # oss-sync 读 ~/.mingdao/oss.env（0600）。CI 里从这个文件生成，不落进仓库。
+          mkdir -p "$HOME/.mingdao"
+          umask 077
+          cat > "$HOME/.mingdao/oss.env" <<ENV
+          OSS_AK=${OSS_AK}
+          OSS_SK=${OSS_SK}
+          OSS_BUCKET=${OSS_BUCKET}
+          OSS_ENDPOINT=${OSS_ENDPOINT}
+          ENV
+          chmod 600 "$HOME/.mingdao/oss.env"
+          ok=0; bad=0
+          for f in dist/*; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            for try in 1 2 3; do
+              if node scripts/oss-sync.mjs put "$f" "downloads/$name"; then ok=$((ok+1)); break; fi
+              echo "  ↻ $name 第 $try 次失败，重试…"
+              [ "$try" = 3 ] && { bad=$((bad+1)); echo "::error title=oss-upload::$name 三次上传失败"; }
+              sleep $((try * 5))
+            done
+          done
+          rm -f "$HOME/.mingdao/oss.env"
+          echo "成功 $ok，失败 $bad"
+          [ "$bad" = 0 ]
+
+      - name: 冒烟（匿名可下载 + 三份清单一致）
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+        run: |
+          set -euo pipefail
+          B="https://${OSS_BUCKET}.oss-cn-hongkong.aliyuncs.com"
+          f=$(ls dist/*.dmg dist/*.deb 2>/dev/null | head -1 | xargs -r basename)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -r 0-1023 "$B/downloads/$f")
+          echo "$f → HTTP $code"
+          [ "$code" = "206" ] || { echo "::error title=oss-smoke::匿名下载失败（$code）"; exit 1; }
