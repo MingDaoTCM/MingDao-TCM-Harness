@@ -106,9 +106,20 @@ export function createProvider(pc) {
   let cfgFile = /** @type {any} */ ({});
   try { cfgFile = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')); } catch {}
   const difyBaseUrl = String(pc.baseUrl || cfgFile?.tcm?.difyBaseUrl || DEFAULT_DIFY_BASE).replace(/\/+$/, '');
-  /** Dify 会话 id（单例）。注意：本 Provider 是「一问诊一实例」的使用方式，
-   *  若将来改成工具/多患者并发，这里必须按患者隔离。 */
-  let conversationId = '';
+    /**
+     * S-1（第三方审计 2026-11）：这里原来是一个**模块级单例** `let conversationId` ✗ ——
+     * 同一诊室连续接诊时，后者的辨证会被前者的病情污染，且前者信息进入后者上下文
+     * （**隐私跨患者泄露** + 临床判断污染）。
+     *
+     * 为什么改成"不发送 conversation_id"（审计给的保守兜底 ③）：
+     *   provider 层拿不到可靠的患者标识 —— visitContext(messages) 只给就诊次数（不唯一），
+     *   从 messages 里猜姓名/出生年属于脆弱的启发式，猜错反而更糟 ✗。
+     *   而"每轮无状态"是**绝对安全**的：不同患者之间不可能串。
+     *   代价是 Dify 侧失去多轮记忆 —— 但系统已用 lastVisitText **显式注入上次病历**，
+     *   必要上下文一条不少，只是不依赖服务端记忆。
+     */
+    // 保留变量只为日志/调试可读性：本版本**不再往请求里放 conversation_id**。
+    let conversationId = '';   // eslint-disable-line no-unused-vars
   let orchestratorWarned = false;
 
   /**
@@ -435,7 +446,8 @@ export function createProvider(pc) {
       }
       const dbody = { inputs: {}, query: difyQuery, response_mode: 'streaming', user: 'mdh-dify-main' };
       if (files.length) dbody.files = files;
-      if (conversationId) dbody.conversation_id = conversationId;
+        // S-1：**不发送 conversation_id**（见上方说明）——原先这里会把上一患者的会话 id 带过去 ✗
+        // 如需恢复多轮记忆，必须先拿到可靠的患者键（例如让 pack 在 tool 结果里显式给出 patientId）。
       const dres = await fetch(`${difyBaseUrl}/v1/chat-messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${difyKey}` },
@@ -504,7 +516,7 @@ export function createProvider(pc) {
       const handle = (/** @type {string} */ payload) => {
         let j;
         try { j = JSON.parse(payload); } catch { return; }
-        if (j.conversation_id) conversationId = j.conversation_id;
+        if (j.conversation_id) console.log('[dify] 本轮返回了 conversation_id（本条不落盘、不跨请求复用）');
         if (j.event === 'message') { answer += j.answer || ''; emitStreams(false); }
         else if (j.event === 'message_end') { if (j.metadata?.usage) usage = j.metadata.usage; ended = true; }
         else if (j.event === 'error') { streamError = String(j.message || j.error || j.code || 'Dify 工作流错误'); }
