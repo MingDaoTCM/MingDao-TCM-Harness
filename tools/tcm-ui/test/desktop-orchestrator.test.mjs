@@ -17,9 +17,11 @@ import {
   checkForUpdate,
   installLayer,
   pickArtifact,
+  REQUIRED_LAYER_FILES,
   resolveAppRoot,
   resolveKernelRoot,
   startApp,
+  verifyLayerInstalled,
   versionGt,
 } from '../desktop/orchestrator.mjs';
 
@@ -69,6 +71,96 @@ await testAsync('resolveKernelRoot：显式传入优先于 MINGDAO_KERNEL 环境
     assert.equal(resolveKernelRoot({ explicit: KERNEL }), KERNEL, '显式给的内核必须赢过环境变量');
   } finally {
     if (saved === undefined) delete process.env.MINGDAO_KERNEL; else process.env.MINGDAO_KERNEL = saved;
+  }
+});
+
+console.log('\n[1b] 垂域层安装自检（R-1：装不上时必须报得让人能修）');
+
+// 这一组用例守的是**错误信息的可操作性**，不是某个字段的值。
+// 背景（审计 v0.1.40 §3.1）：垂域层没装上时，内核抛的是「服务商 "dify" 缺少 baseUrl，
+// 请运行 mingdao init 重新配置」——而 mingdao init 是重配 API Key 的向导，
+// 照做一百遍也不会让 providers/dify.mjs 出现。报错把人指向永远修不好的方向，
+// 是这个项目定义的「静默失败」里最坏的一种：报了错，但错在归因。
+await testAsync('verifyLayerInstalled：齐全时静默通过（不抛错）', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-vli-ok-'));
+  for (const rel of REQUIRED_LAYER_FILES) {
+    fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true });
+    fs.writeFileSync(path.join(home, rel), '// stub\n');
+  }
+  verifyLayerInstalled({ home, appRoot: REPO, layer: { pack: '已安装', provider: '已安装' } });
+});
+
+await testAsync('★ verifyLayerInstalled：缺 provider 时必须抛错，且点明「与 API Key 无关」', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-vli-miss-'));
+  // 只造 pack，缺 providers/dify.mjs —— 正是「打包 filter 漏了 layer/providers」的形态
+  fs.mkdirSync(path.join(home, 'packs', 'tcm'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'packs', 'tcm', 'pack.mjs'), '// stub\n');
+  fs.writeFileSync(path.join(home, 'packs', 'tcm', 'pack.json'), '{}\n');
+
+  let msg = '';
+  assert.throws(
+    () => verifyLayerInstalled({ home, appRoot: REPO, layer: { pack: '已安装', provider: '失败：EPERM' } }),
+    (e) => { msg = String(e?.message || ''); return true; },
+  );
+  // 三条都要：说清缺什么、说清与 Key 无关、说清安装包该有什么
+  assert.ok(msg.includes('providers'), '必须点出缺失的是哪一项：' + msg);
+  assert.ok(/mingdao init 无法修复/.test(msg), '必须明确否掉「mingdao init」这个错误方向：' + msg);
+  assert.ok(msg.includes(path.join(REPO, 'layer')), '必须指出安装包里该有什么，便于核对打包产物：' + msg);
+  // 反例守卫：错误信息里不得**只**说 baseUrl（那正是内核原来那句误导的话）
+  assert.ok(!/缺少 baseUrl/.test(msg), '不得复述内核那句误导性报错：' + msg);
+});
+
+await testAsync('★ verifyLayerInstalled：三个必需文件都来自 REQUIRED_LAYER_FILES（唯一定义处）', () => {
+  // 守的是「新增扩展点却忘了加进自检」：CRLF 无关，只比集合。
+  const want = [
+    path.join('providers', 'dify.mjs'),
+    path.join('packs', 'tcm', 'pack.mjs'),
+    path.join('packs', 'tcm', 'pack.json'),
+  ];
+  assert.deepEqual([...REQUIRED_LAYER_FILES], want, '必需文件清单变了？同步修改自检与打包 filter 的断言');
+  // 反向断言：清单里的每一项都必须真的存在于仓库的 layer/ 下（否则自检永远红）
+  for (const rel of REQUIRED_LAYER_FILES) {
+    const src = path.join(REPO, 'layer', rel.replace(/^providers[\\/]/, 'providers' + path.sep).replace(/^packs[\\/]/, 'packs' + path.sep));
+    assert.ok(fs.existsSync(src), `仓库里应有 ${rel}（自检会要求在 home 里出现它）`);
+  }
+});
+
+await testAsync('★ 装好的 provider 必须被内核解析成 dify，而不是 custom: 直连', async () => {
+  // 这条守的是**静默绕过 Dify**（审计 v0.1.40 §3.1 的反面教材）：
+  // 曾有人（我）提议把 dify 声明进 `config.customModels`。那样 `pc.name` 会变成
+  // `custom:dify-chatflow`，含冒号 → `customProviderFile()` 返回 null → **dify.mjs 不加载**，
+  // 请求落到 OpenAI 兼容直连：问诊不走知识库、病历不落盘，而且**不报错**。
+  //
+  // 这里手工构造「installLayer 成功之后」的形态（用写文件代替 cpSync，
+  // 绕开本机 copyfile 限制，否则这条用例会被沙箱拦掉而失去意义）。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-prov-'));
+  fs.mkdirSync(path.join(home, 'providers'), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, 'providers', 'dify.mjs'),
+    fs.readFileSync(path.join(REPO, 'layer', 'providers', 'dify.mjs')),
+  );
+  // pointConfigAtDify 写出来的形态：provider=dify，**没有**顶层 baseUrl
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+    provider: 'dify', model: 'dify-chatflow', permission: 'ask', sandbox: 'off',
+  }, null, 2));
+
+  const saved = process.env.MINGDAO_HOME;
+  process.env.MINGDAO_HOME = home;
+  try {
+    const idx = await import(pathToFileURL(path.join(KERNEL, 'src', 'providers', 'index.js')).href);
+    const cfg = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8'));
+    const pc = idx.resolveProviderConfig(cfg, cfg.model);
+
+    assert.equal(pc.name, 'dify', 'provider 名必须是 dify；custom:<模型名> 会走直连并静默绕过 Dify 工作流');
+    assert.equal(pc.baseUrl, '', '此形态下 baseUrl 就是空的 —— 它是**无害的**，因为模块存在时会先加载');
+    const file = idx.customProviderFile(pc.name);
+    assert.ok(file && fs.existsSync(file), 'provider 名必须能解析到 providers/dify.mjs');
+
+    const p = await idx.createProvider(cfg, 'dify-chatflow');
+    assert.equal(p.name, 'dify', 'createProvider 必须落到 dify');
+    assert.equal(typeof p.chat, 'function', '必须是一个可用的 provider');
+  } finally {
+    if (saved === undefined) delete process.env.MINGDAO_HOME; else process.env.MINGDAO_HOME = saved;
   }
 });
 

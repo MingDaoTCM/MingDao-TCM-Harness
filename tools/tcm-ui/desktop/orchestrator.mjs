@@ -117,6 +117,44 @@ export function installLayer({ home, appRoot }) {
   return out;
 }
 
+/** 垂域层装进 home 之后**必须存在**的文件（相对 home）。少任何一个，内核就加载不到对应扩展。 */
+export const REQUIRED_LAYER_FILES = [
+  path.join('providers', 'dify.mjs'),
+  path.join('packs', 'tcm', 'pack.mjs'),
+  path.join('packs', 'tcm', 'pack.json'),
+];
+
+/**
+ * 断言垂域层真的装进了 home（审计 v0.1.40 R-1）。
+ *
+ * **为什么看文件、不看 `installLayer` 的返回值**：
+ * 返回值是给人读的措辞（`'已安装'` / `'失败：EPERM…'`）—— 拿它做判断等于把契约交给文案。
+ * 要断言的事实是"这几个文件在不在"，与 `kernel-sentinel`（断言 Pack 真的挂载、
+ * 而不是只断言它被声明）是同一个思路。
+ *
+ * **为什么缺失时必须抛、不能只 warn**：
+ * 文件缺失时内核会抛「服务商 "dify" 缺少 baseUrl，请运行 mingdao init 重新配置」——
+ * 而 `mingdao init` 是**重配 API Key** 的向导，照做一百遍也不会让文件出现。
+ * 报错一旦把人指向修不好的方向，后面所有的排障时间都是纯浪费。
+ *
+ * @param {{home:string, appRoot:string, layer?:{pack?:string, provider?:string}}} a
+ * @throws {Error} 缺少必需文件时；错误信息里必须点明「与 API Key 无关」
+ */
+export function verifyLayerInstalled({ home, appRoot, layer = {} }) {
+  const missing = REQUIRED_LAYER_FILES.filter((rel) => !fs.existsSync(path.join(home, rel)));
+  if (!missing.length) return;
+  const state = `Pack ${layer.pack || '未知'} · Provider ${layer.provider || '未知'}`;
+  throw new Error(
+    `垂域层安装失败：数据目录里缺少 ${missing.join('、')}\n`
+    + `安装态：${state}\n`
+    + `数据目录：${home}\n`
+    + `安装包内应有：${path.join(appRoot, 'layer')}\n`
+    + '可能原因：安装包不完整（打包 filter 漏了 layer/ 下的目录）、磁盘空间不足、'
+    + '或安全软件拦截了文件写入。\n'
+    + '⚠ 这与 API Key 无关 —— 运行 mingdao init 无法修复本问题。',
+  );
+}
+
 /**
  * 只在**配置是本应用刚建出来**的时候，把 provider 指向 Dify（路线 A）。
  * 医师自己改过配置（hadConfig=true）就绝不动 —— 那是他的选择。
@@ -292,6 +330,20 @@ export async function startApp(opts = {}) {
   const layer = installLayer({ home, appRoot });
   if (!hadConfig) pointConfigAtDify(home);
 
+  // ── R-1（审计 v0.1.40 §3.1）：装完立刻**自检文件是否真的在位**，别信返回值措辞 ──
+  //
+  // 为什么必须在起内核**之前**拦：
+  //   文件缺失时内核会抛 `服务商 "dify" 缺少 baseUrl，请运行 mingdao init 重新配置。`
+  //   —— 而 `mingdao init` 是**重配 API Key** 的向导。医师照着做一百遍也不会让
+  //   `providers/dify.mjs` 出现：**报错把人指向了永远修不好的方向**。
+  //   2026-11 实测确认这条链（2×2 矩阵）：providers/dify.mjs 不在 + 顶层 baseUrl 已被
+  //   pointConfigAtDify 删掉 ⇒ createProvider 才走到 `if (!pc.baseUrl) throw`
+  //   （MingDao-Harness src/providers/index.js:683-701 —— 自定义模块存在时会先 return）。
+  //
+  // 抽查逻辑抽成导出函数，是为了能被**离线单测**：埋在这里就只能靠端到端偶然撞上，
+  // 而端到端在本机受沙箱限制（cpSync 可能被拦），撞上了也未必报得清。
+  verifyLayerInstalled({ home, appRoot, layer });
+
   const authToken = crypto.randomBytes(16).toString('hex');
   let kernelPort = 0;
   for (let attempt = 0; attempt < 6 && !kernelPort; attempt++) {
@@ -306,9 +358,10 @@ export async function startApp(opts = {}) {
   }
   if (!kernelPort) throw new Error('内核 WebUI 启动失败：随机端口连续 6 次都被占用');
 
-  // 垂域层没装成功就**喊出来**：这种情况界面照样能打开、照样能聊天，
-  // 但问诊不走 Dify、病历不落盘 —— 静默失败正是这一整类问题的共同点。
-  if (opts.quiet === false || layer.pack.includes('失败') || layer.provider.includes('失败')) {
+  // 真正的安装失败已在上面自检里抛出去了（main.js 的 boot → fail → dialog.showErrorBox，
+  // 医师看得见）。这里只剩"装上了，但可能装的是旧版"这一种情形需要留日志。
+  // 判据仍然是返回值措辞，但**只用于打日志、不用于做判断** —— 让它错了也不会放过致命情形。
+  if (opts.quiet === false) {
     console.warn(`[TCM] 垂域层：Pack ${layer.pack} · Provider ${layer.provider}（数据目录 ${home}）`);
   }
 

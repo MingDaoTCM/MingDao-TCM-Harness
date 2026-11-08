@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import https from 'node:https';
 import http from 'node:http';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { APP_NAME, resolveAppRoot, resolveKernelRoot, startApp, checkForUpdate, pickArtifact } from './orchestrator.mjs';
 
@@ -173,7 +174,7 @@ async function initAutoUpdate() {
  * @param {string} url @param {string} name @param {(pct:number)=>void} [onProgress]
  * @returns {Promise<string>} 落盘路径
  */
-function downloadInstaller(url, name, onProgress) {
+function downloadInstaller(url, name, onProgress, expectedSha256) {
   return new Promise((resolve, reject) => {
     const dir = path.join(app.getPath('downloads'), APP_NAME.replace(/[^\w一-龥-]/g, ''));
     fs.mkdirSync(dir, { recursive: true });
@@ -196,7 +197,24 @@ function downloadInstaller(url, name, onProgress) {
           if (total && onProgress) onProgress(Math.floor((got / total) * 100));
         });
         res.pipe(file);
-        file.on('finish', () => file.close(() => resolve(dest)));
+        file.on('finish', () => file.close(() => {
+          // C-3（审计 v0.1.40）：下载完**先校验 sha256 再交给安装程序**。
+          // 原实现下完直接 shell.openPath 执行 ✗ —— 而这一版把下载链路从"单站"扩成了
+          // "OSS + 香港 302 + 深圳 302" 三个节点，任何一环被篡改都会被执行 ✗。
+          // 清单（/api/downloads）里本来就有 sha256，只是以前没用上。
+          try {
+            const want = String(expectedSha256 || '').trim().toLowerCase();
+            if (!want) { try { fs.unlinkSync(dest); } catch { /* 忽略 */ } reject(new Error('清单未提供 sha256，拒绝安装（fail-closed）')); return; }
+            const got = crypto.createHash('sha256').update(fs.readFileSync(dest)).digest('hex');
+            if (got !== want) {
+              try { fs.unlinkSync(dest); } catch { /* 忽略 */ }
+              reject(new Error(`安装包校验失败：期望 ${want.slice(0, 16)}…，实际 ${got.slice(0, 16)}…（已删除，未执行）`));
+              return;
+            }
+            console.log('[update] sha256 校验通过 ' + got.slice(0, 16) + '…');
+            resolve(dest);
+          } catch (/** @type {any} */ e) { reject(e); }
+        }));
       });
       req.on('error', reject);
       req.setTimeout(30000, () => req.destroy(new Error('下载超时')));
@@ -257,8 +275,10 @@ async function installFromSite(/** @type {string} */ latest, /** @type {string} 
   }
   try {
     win?.setProgressBar(0.01);
+    // C-3：把清单里该文件的 sha256 一起传下去，下载完先校验再交给安装程序。
+    const expectSha = String((mj?.files || []).find((f) => f.name === name)?.sha256 || '');
     const dest = await downloadInstaller(`${SITE_URL}/downloads/${encodeURIComponent(name)}`, name,
-      (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } });
+      (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } }, expectSha);
     win?.setProgressBar(-1);
     await showBox({ type: 'info', title: '更新已下载', message: `v${latest} 已下载完成`, detail: installHint(dest) });
     // Linux/deb：**deb 形态无法免密码自动更新**（装到 /opt 要提权）。
@@ -357,7 +377,7 @@ async function checkUpdates() {
     try {
       win?.setProgressBar(0.01);
       const dest = await downloadInstaller(`${SITE_URL}/downloads/${encodeURIComponent(name)}`, name,
-        (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } });
+        (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } }, String((mj?.files || []).find((f) => f.name === name)?.sha256 || ''))
       win?.setProgressBar(-1);
       await show({ type: 'info', title: '更新已下载', message: `v${r.latest} 已下载完成`, detail: installHint(dest) });
       const err = await shell.openPath(dest);              // 直接打开安装程序

@@ -94,7 +94,7 @@ export function createProvider(pc) {
   let creds = /** @type {any} */ ({});
   try { creds = JSON.parse(fs.readFileSync(path.join(home, 'credentials.json'), 'utf8')); } catch {}
 
-  const difyKey = pc.apiKey || creds.dify || '';
+  let difyKey = pc.apiKey || creds.dify || '';
   // 读一次配置：Dify 地址与编排模型都从这里取。
   // ⚠ 为什么不靠 config 的顶层 baseUrl：内核的 resolveProviderConfig 是
   //   `baseUrl = cfg.baseUrl || <目标模型服务商预设>.baseUrl` —— 顶层值会**压过**目标模型自己的地址。
@@ -105,7 +105,7 @@ export function createProvider(pc) {
   //   config.json 里**不要**写顶层 baseUrl。
   let cfgFile = /** @type {any} */ ({});
   try { cfgFile = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')); } catch {}
-  const difyBaseUrl = String(pc.baseUrl || cfgFile?.tcm?.difyBaseUrl || DEFAULT_DIFY_BASE).replace(/\/+$/, '');
+  let difyBaseUrl = String(pc.baseUrl || cfgFile?.tcm?.difyBaseUrl || DEFAULT_DIFY_BASE).replace(/\/+$/, '');
     /**
      * S-1（第三方审计 2026-11）：这里原来是一个**模块级单例** `let conversationId` ✗ ——
      * 同一诊室连续接诊时，后者的辨证会被前者的病情污染，且前者信息进入后者上下文
@@ -375,6 +375,16 @@ export function createProvider(pc) {
   return {
     name: pc.name,
     async chat(/** @type {any} */ opts) {
+      // C-2（审计 v0.1.40）：Key / 端点**每次请求前重读** ——
+      // 原来只在 provider 创建时读一次 ✗：医师在设置页改了 Key、界面显示"已保存"，
+      // 问诊却仍用旧 Key/旧地址（实测确认），等于保存无效。配置文件很小，重读代价可忽略。
+      try {
+        const c2 = JSON.parse(fs.readFileSync(path.join(home, 'credentials.json'), 'utf8'));
+        const f2 = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8'));
+        difyKey = String(pc.apiKey || c2.dify || '');
+        difyBaseUrl = String(pc.baseUrl || f2?.tcm?.difyBaseUrl || DEFAULT_DIFY_BASE).replace(/\/+$/, '');
+        cfgFile = f2;
+      } catch { /* 读不到就沿用创建时的值 */ }
       const messages = Array.isArray(opts.messages) ? opts.messages : [];
       const tools = Array.isArray(opts.tools) ? opts.tools : [];
       const lastUser = [...messages].reverse().find((m) => m?.role === 'user');
