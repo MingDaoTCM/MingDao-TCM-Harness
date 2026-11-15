@@ -201,10 +201,17 @@ export function visitLabel(n) {
  * 患者数据**不可半写** —— 半份注册表比没有更危险（会被当成"这个人不存在"而重新发号）。
  */
 export function writeJsonAtomicAt(file, obj) {
+  // H-3（审计 v0.1.40）：rename 之前**必须先 fsync**，否则断电后可能出现「文件已改名但内容还没落盘」✗。
+  // rename 之后再 fsync 目录，保证目录项也持久化。
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+  const fd = fs.openSync(tmp, 'w', 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify(obj, null, 2) + '\n');
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, file);
+  try { const dfd = fs.openSync(path.dirname(file), 'r'); try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); } } catch { /* 某些文件系统不支持目录 fsync */ }
 }
 
 /**
@@ -212,6 +219,44 @@ export function writeJsonAtomicAt(file, obj) {
  * 改名字不该影响任何一次就诊内容。
  * @returns {{ok:true, patient:any} | {ok:false, error:string}}
  */
+/**
+ * 注册表**跨进程互斥锁**（H-3，审计 v0.1.40）。
+ *
+ * 为什么要它：patients.json 是患者主键文件，CLI 与问诊台是两个进程，都会「读→改→写」。
+ * 原实现无锁 ✗ —— 两个进程同时「读」到同一份 nextId → 各自发号 → **同一个人拿到两个病历号**
+ * 或后写者覆盖先写者（患者记录"消失"）✗。
+ *
+ * 做法：O_EXCL 建锁文件（原子），拿不到就短等重试；超过 staleMs 的锁视为残留（进程崩了）强行接管。
+ * 只锁「读→分配→写」这一段；锁文件与 patients.json 同目录。
+ */
+export function withRegistryLock(home, fn, { timeoutMs = 8000, staleMs = 10000 } = {}) {
+  const file = registryFile(home);
+  const lock = `${file}.lock`;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const t0 = Date.now();
+  for (;;) {
+    try {
+      const fd = fs.openSync(lock, 'wx');
+      try { fs.writeFileSync(fd, `${process.pid}\n`); } finally { fs.closeSync(fd); }
+      break;
+    } catch (e) {
+      if (e?.code !== 'EEXIST') throw e;
+      try {
+        const st = fs.statSync(lock);
+        if (Date.now() - st.mtimeMs > staleMs) { try { fs.unlinkSync(lock); } catch { /* 别人先删了 */ } continue; }
+      } catch { /* 锁刚被释放 */ }
+      if (Date.now() - t0 > timeoutMs) throw new Error('等待注册表锁超时（另一个进程长时间占用 patients.json）');
+      // 短等：同步 sleep 几十毫秒（用 Atomics 避免忙转）
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40); } catch { /* 退化 */ }
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.unlinkSync(lock); } catch { /* 忽略 */ }
+  }
+}
+
 export function updatePatient(home, id, patch = {}) {
   const pid = String(id || '').trim().toUpperCase();
   if (!/^P\d{3,}$/.test(pid)) return { ok: false, error: '非法的病历号' };
@@ -599,41 +644,45 @@ export function createPack(ctx) {
     const birth = String(args?.birth || '').replace(/[^0-9]/g, '').slice(0, 4);
     const sex = String(args?.sex || '').trim();
 
-    const { reg, error } = tryRegistry();
-    if (error) return error;
+    // H-3：整段「读→分配病历号→写」必须在**跨进程锁**内完成，
+    // 否则 CLI 与问诊台并发时可能各自发号 → 同一人两个病历号 / 后写覆盖先写 ✗。
+    return withRegistryLock(home, () => {
+      const { reg, error } = tryRegistry();
+      if (error) return error;
 
-    // 安全闸门：同名已有患者时**拒绝登记**，把选择权交回医师。
-    // 若这里放行，就会出现「两个张三」——正是「避免混病历」要防的事。
-    const m = matchPatient(reg, { name, birth, sex });
-    if (m.ambiguous) {
-      const list = m.ambiguous
-        .map((p) => `· ${p.name}（${p.birth || '出生年未录'}年生，性别${p.sex || '未录'}，病历号 ${p.id}，末次就诊 ${String(p.lastVisitAt || '—').slice(0, 10)}）`)
-        .join('\n');
-      return {
-        ok: false,
-        error: `系统中已有 ${m.ambiguous.length} 位患者叫「${name}」，不得重复登记。请让医师确认是哪位（或补齐出生年以区分）：\n${list}`,
-      };
-    }
-    if (m.patient) {
-      return {
-        ok: false,
-        error: `患者「${name}」已存在（病历号 ${m.patient.id}），请直接使用该病历号，不要重复登记。`,
-      };
-    }
+      // 安全闸门：同名已有患者时**拒绝登记**，把选择权交回医师。
+      // 若这里放行，就会出现「两个张三」——正是「避免混病历」要防的事。
+      const m = matchPatient(reg, { name, birth, sex });
+      if (m.ambiguous) {
+        const list = m.ambiguous
+          .map((p) => `· ${p.name}（${p.birth || '出生年未录'}年生，性别${p.sex || '未录'}，病历号 ${p.id}，末次就诊 ${String(p.lastVisitAt || '—').slice(0, 10)}）`)
+          .join('\n');
+        return {
+          ok: false,
+          error: `系统中已有 ${m.ambiguous.length} 位患者叫「${name}」，不得重复登记。请让医师确认是哪位（或补齐出生年以区分）：\n${list}`,
+        };
+      }
+      if (m.patient) {
+        return {
+          ok: false,
+          error: `患者「${name}」已存在（病历号 ${m.patient.id}），请直接使用该病历号，不要重复登记。`,
+        };
+      }
 
-    const pid = allocId(reg);
-    reg.patients[pid] = {
-      id: pid, name, birth, sex,
-      createdAt: new Date().toISOString(),
-      lastVisitAt: '',
-      visits: 0,
-    };
-    saveRegistry(reg);
-    return {
-      ok: true,
-      output: `已登记新患者：${name}${birth ? `（${birth}年生）` : ''}｜病历号 ${pid}。请用该病历号调用 intake_collect 落盘首诊病历。`,
-      data: { patientId: pid, name, birth, sex },
-    };
+      const pid = allocId(reg);
+      reg.patients[pid] = {
+        id: pid, name, birth, sex,
+        createdAt: new Date().toISOString(),
+        lastVisitAt: '',
+        visits: 0,
+      };
+      saveRegistry(reg);
+      return {
+        ok: true,
+        output: `已登记新患者：${name}${birth ? `（${birth}年生）` : ''}｜病历号 ${pid}。请用该病历号调用 intake_collect 落盘首诊病历。`,
+        data: { patientId: pid, name, birth, sex },
+      };
+    });
   }
 
   // ───────── 工具三：复诊四态对比（读） ─────────
