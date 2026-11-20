@@ -82,7 +82,7 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 
 ## 与上游的版本关系
 
-- 本层当前对齐 **MingDao-Harness v0.8.1**（`engines.mingdao: ">=0.5 <0.7"`，兼容窗口已覆盖）；
+- 本层当前对齐 **MingDao-Harness v0.8.1**（`engines.mingdao: ">=0.5 <0.9"`，兼容窗口已覆盖）；
   > 这个版本号不是装饰：`tools/doc-lint.mjs` 的 INV-6 会拿它跟**实际内核版本**比，
   > 落后了就红 —— 提醒你「自那以后本层没有重新验证过」。内核升版本后跑一遍 `npm test` 再改这个数。
   > （2026-10-09 就是这么发现的：当天先是内核到 v0.8.1、README 还写 0.6.10，门禁变红；
@@ -90,9 +90,9 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
   > 这条门禁的价值就在这：内核往前走而本层没跟，**只有它会说话**。）
 - 已在 v0.8.1 内核下验证全部 11 档门禁（`npm test`，清单唯一定义处 `tools/gates.mjs`）：
   `pack verify`（静态）、`doc-lint`（8 条文档不变量）、`kernel-sentinel`（Pack 真的挂载）、
-  `pack.test.mjs`（55 项）、`integration.test.mjs`（11 项）、`dify.test.mjs`（21 项）、
-  `tcm-data`（14 项）、`settings`（8 项）、`ui-wiring`（8 项）、
-  `desktop-orchestrator`（25 项）、`site`（27 项）—— **全部通过**；
+  `pack.test.mjs`（60 项）、`integration.test.mjs`（11 项）、`dify.test.mjs`（22 项）、
+  `tcm-data`（14 项）、`settings`（8 项）、`ui-wiring`（10 项）、
+  `desktop-orchestrator`（34 项）、`site`（28 项）—— **全部通过**；
 - **内核发新版不会通知本层**：push/PR 之外，每周还有一次 `.github/workflows/kernel-sentinel.yml`
   对内核 `main` 跑一遍全部门禁 —— 上游一改，最迟一周内在这里变红，而不是等装机才发现；
 - 接入的扩展点：垂域 **Pack（Pack API v1：tools / constraints / promptSections）** + 自定义 **Provider（dify.mjs，含 `supportsVision`）**；

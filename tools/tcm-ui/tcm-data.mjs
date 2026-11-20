@@ -127,7 +127,8 @@ export function reminders(home) {
  * 单患者详情：时间线（**最早 → 最新**）+ 逐次与上次的逐项变化。
  *
  * 这里给的是**确定性的事实**（哪个字段从什么变成什么），不含任何疗效判断 ——
- * 「四态对比」（消失/减轻/无变化/加重）是模型判定的产物，走 `visit_compare` 工具，不进这里。
+ * 「四态对比」（消失/减轻/无变化/加重）是模型判定的产物，由 `visit_compare` 工具判定后
+ * **固化进快照**；这里只把已固化的结果**透传**给前端（不重新判定、不二次加工）。
  * @param {string} home MINGDAO_HOME
  * @param {string} id 病历号
  */
@@ -167,6 +168,10 @@ export function patientDetail(home, id) {
       file: path.basename(file),
       items,
       changes,
+      // 四态对比（M-4，审计 v0.1.38/0.1.40）：visit_compare 已把它固化进快照
+      // （compare = { at, items }），这里只把 items 数组透传给前端 —— 否则落了盘却从不显示，
+      // 医师看不到疗效对比就没法"效不更方"。摊平成数组，前端 `v.compare` 直接用。
+      compare: Array.isArray(snap.compare?.items) ? snap.compare.items : [],
     });
     prev = snap;
   });

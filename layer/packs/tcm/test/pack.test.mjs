@@ -27,7 +27,7 @@ async function testAsync(name, fn) {
 
 // ── 载入被测 Pack（用临时 home，绝不碰真实患者数据） ──
 const TMP_HOME = path.join(process.env.TMPDIR || '/tmp', `tcm-pack-test-${process.pid}`);
-const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock, followupStatus, OVERDUE_DAYS, DUE_SOON_DAYS, STATUS_RANK, STATUS_CN, updatePatient, deletePatient, listSnapshotFiles } =
+const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock, followupStatus, OVERDUE_DAYS, DUE_SOON_DAYS, STATUS_RANK, STATUS_CN, updatePatient, deletePatient, listSnapshotFiles, withRegistryLock, withRegistryLockAsync, registryFile } =
   await import(path.join(PACK_DIR, 'pack.mjs'));
 
 const pack = createPack({ home: TMP_HOME, packDir: PACK_DIR, packName: 'tcm', log: () => {} });
@@ -567,6 +567,72 @@ await testAsync('★ deletePatient：必须显式确认，且**连带删掉病�
   assert.ok(!after.patients[pid], '注册表里不该还有这个病历号');
   assert.ok(!fs.existsSync(path.join(TMP_HOME, 'intake', pid)), '病历目录应被删除');
   assert.equal(deletePatient(TMP_HOME, pid, { confirm: true }).ok, false, '重复删除应报不存在');
+});
+
+console.log('\n[7] 跨进程锁（H-1/H-2，审计 v0.1.42）');
+function mkLockHome() {
+  return fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'tcm-lock-'));
+}
+
+test('withRegistryLock：正常路径 fn 执行后锁被释放', () => {
+  const home = mkLockHome();
+  const lockPath = `${registryFile(home)}.lock`;
+  let ran = false;
+  const r = withRegistryLock(home, () => { ran = true; return 'ok'; });
+  assert.equal(r, 'ok');
+  assert.ok(ran, 'fn 应被执行');
+  assert.ok(!fs.existsSync(lockPath), '正常路径锁应被删除（否则下次拿锁会 EEXIST）');
+});
+
+test('withRegistryLock：陈旧锁（超 staleMs）被强拆并成功接管', () => {
+  const home = mkLockHome();
+  const lockPath = `${registryFile(home)}.lock`;
+  // 预置一把"进程崩了留下的"陈旧锁：mtime 改到 20 秒前
+  fs.writeFileSync(lockPath, '999\n');
+  const old = new Date(Date.now() - 20000);
+  fs.utimesSync(lockPath, old, old);
+  let ran = false;
+  withRegistryLock(home, () => { ran = true; }, { staleMs: 10000, timeoutMs: 2000 });
+  assert.ok(ran, '陈旧锁应被判定为残留并强拆，然后成功拿锁');
+});
+
+test('★ withRegistryLock：释放前验证所有权，不误删别人的新锁（H-2 回归）', () => {
+  const home = mkLockHome();
+  const lockPath = `${registryFile(home)}.lock`;
+  withRegistryLock(home, () => {
+    // 模拟「持有的锁超时被别的进程强拆并重建」：删掉自己的锁，另建一把（inode 变了）
+    fs.unlinkSync(lockPath);
+    fs.writeFileSync(lockPath, '999999\n');
+  });
+  // fn 结束后 finally 应比对 inode —— 新锁不是自己的，绝不能删
+  assert.ok(fs.existsSync(lockPath), 'H-2 回归：锁被强拆重建后，旧持有者 finally 不得误删新锁');
+  assert.equal(fs.readFileSync(lockPath, 'utf8').trim(), '999999', '新锁内容应原样保留');
+  fs.unlinkSync(lockPath);
+});
+
+await testAsync('withRegistryLockAsync：跨 await 持锁且正确释放', async () => {
+  const home = mkLockHome();
+  const lockPath = `${registryFile(home)}.lock`;
+  const r = await withRegistryLockAsync(home, async () => {
+    await new Promise((res) => setTimeout(res, 20));
+    return 'async-ok';
+  });
+  assert.equal(r, 'async-ok');
+  assert.ok(!fs.existsSync(lockPath), 'async 版正常路径也应释放锁');
+});
+
+test('★ withRegistryLock：锁被占且未超 stale 时，超时抛错（不绕过、不静默）', () => {
+  // H-1 的兜底：updatePatient/deletePatient/intakeCollect 现在都走 withRegistryLock，
+  // 这条测的是锁本身的互斥+超时语义 —— 锁被占时**必须**等锁/超时，绝不能绕过锁直接写。
+  const home = mkLockHome();
+  const lockPath = `${registryFile(home)}.lock`;
+  fs.writeFileSync(lockPath, '999\n');          // 占住锁，mtime=now，不会超 stale 被强拆
+  assert.throws(
+    () => withRegistryLock(home, () => {}, { staleMs: 10000, timeoutMs: 60 }),
+    /等待注册表锁超时/,
+    '锁被占且未超 stale 时应超时报错，而不是绕过锁执行 fn',
+  );
+  fs.unlinkSync(lockPath);
 });
 
 console.log(`\n结果：通过 ${passed}，失败 ${failed}`);

@@ -229,16 +229,21 @@ export function writeJsonAtomicAt(file, obj) {
  * 做法：O_EXCL 建锁文件（原子），拿不到就短等重试；超过 staleMs 的锁视为残留（进程崩了）强行接管。
  * 只锁「读→分配→写」这一段；锁文件与 patients.json 同目录。
  */
-export function withRegistryLock(home, fn, { timeoutMs = 8000, staleMs = 10000 } = {}) {
-  const file = registryFile(home);
-  const lock = `${file}.lock`;
+/** withRegistryLock 短等用的共享缓冲（复用，不每次新建 SharedArrayBuffer） */
+const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * 拿注册表锁（同步阻塞）。返回拿到的这把锁的 inode —— 释放时用它做所有权校验（H-2）。
+ * O_EXCL 建锁文件（原子）；拿不到就短等重试；超过 staleMs 的锁视为残留（进程崩了）强行接管。
+ */
+function acquireRegistryLock(lock, { timeoutMs = 8000, staleMs = 10000 } = {}) {
   fs.mkdirSync(path.dirname(lock), { recursive: true });
   const t0 = Date.now();
   for (;;) {
     try {
       const fd = fs.openSync(lock, 'wx');
       try { fs.writeFileSync(fd, `${process.pid}\n`); } finally { fs.closeSync(fd); }
-      break;
+      try { return fs.statSync(lock).ino; } catch { return 0; } // 拿不到 ino 就退化到无条件释放
     } catch (e) {
       if (e?.code !== 'EEXIST') throw e;
       try {
@@ -246,41 +251,67 @@ export function withRegistryLock(home, fn, { timeoutMs = 8000, staleMs = 10000 }
         if (Date.now() - st.mtimeMs > staleMs) { try { fs.unlinkSync(lock); } catch { /* 别人先删了 */ } continue; }
       } catch { /* 锁刚被释放 */ }
       if (Date.now() - t0 > timeoutMs) throw new Error('等待注册表锁超时（另一个进程长时间占用 patients.json）');
-      // 短等：同步 sleep 几十毫秒（用 Atomics 避免忙转）
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40); } catch { /* 退化 */ }
+      try { Atomics.wait(LOCK_SLEEP, 0, 0, 40); } catch { /* 退化 */ }
     }
   }
+}
+
+/**
+ * 释放锁（H-2）：只有这把锁还是自己拿的那把才删。
+ * 否则说明持有的锁已超时被别的进程强拆重建 —— 删了就会毁掉别人的锁 → 双进程并发写。
+ */
+function releaseRegistryLock(lock, myIno) {
   try {
-    return fn();
-  } finally {
-    try { fs.unlinkSync(lock); } catch { /* 忽略 */ }
-  }
+    if (myIno && fs.statSync(lock).ino !== myIno) return;
+    fs.unlinkSync(lock);
+  } catch { /* 已被删或读不到 */ }
+}
+
+export function withRegistryLock(home, fn, opts = {}) {
+  const lock = `${registryFile(home)}.lock`;
+  const ino = acquireRegistryLock(lock, opts);
+  try { return fn(); } finally { releaseRegistryLock(lock, ino); }
+}
+
+/**
+ * 异步版：给「读 → await → 写」这类跨 await 的写路径用（如 intakeCollect 的 llmJson 在中间）。
+ * 拿锁/释放仍是同步原语（原子性关键），只是 fn 可以 await —— 持锁会跨过 await 的耗时，
+ * 单机医疗应用下可接受（正确性优先于并发吞吐）。
+ */
+export async function withRegistryLockAsync(home, fn, opts = {}) {
+  const lock = `${registryFile(home)}.lock`;
+  const ino = acquireRegistryLock(lock, opts);
+  try { return await fn(); } finally { releaseRegistryLock(lock, ino); }
 }
 
 export function updatePatient(home, id, patch = {}) {
   const pid = String(id || '').trim().toUpperCase();
   if (!/^P\d{3,}$/.test(pid)) return { ok: false, error: '非法的病历号' };
-  let reg;
-  try { reg = loadRegistryFrom(home); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
-  const p = reg.patients?.[pid];
-  if (!p) return { ok: false, error: `病历号 ${pid} 不存在` };
+  // H-1（审计 v0.1.42）：整段「读→改→写」在跨进程锁内 —— 否则与问诊台落盘并发时，
+  // 改名可能被落盘覆盖（后写覆盖先写），H-3 只锁了「登记」，这里补上「改患者」。
+  return withRegistryLock(home, () => {
+    let reg;
+    try { reg = loadRegistryFrom(home); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    const p = reg.patients?.[pid];
+    if (!p) return { ok: false, error: `病历号 ${pid} 不存在` };
 
-  const next = { ...p };
-  if (patch.name !== undefined) {
-    const name = String(patch.name).trim().replace(/\s+/g, '');
-    if (!name) return { ok: false, error: '姓名不能为空' };
-    next.name = name;
-  }
-  if (patch.birth !== undefined) next.birth = String(patch.birth).replace(/[^0-9]/g, '').slice(0, 4);
-  if (patch.sex !== undefined) {
-    const sex = String(patch.sex).trim();
-    if (sex && !['男', '女'].includes(sex)) return { ok: false, error: '性别只能是男/女（或留空）' };
-    next.sex = sex;
-  }
-  next.updatedAt = new Date().toISOString();
-  reg.patients[pid] = next;
-  try { writeJsonAtomicAt(registryFile(home), reg); } catch (e) { return { ok: false, error: `写入失败：${e?.message || e}` }; }
-  return { ok: true, patient: { id: pid, ...next } };
+    const next = { ...p };
+    if (patch.name !== undefined) {
+      const name = String(patch.name).trim().replace(/\s+/g, '');
+      if (!name) return { ok: false, error: '姓名不能为空' };
+      next.name = name;
+    }
+    if (patch.birth !== undefined) next.birth = String(patch.birth).replace(/[^0-9]/g, '').slice(0, 4);
+    if (patch.sex !== undefined) {
+      const sex = String(patch.sex).trim();
+      if (sex && !['男', '女'].includes(sex)) return { ok: false, error: '性别只能是男/女（或留空）' };
+      next.sex = sex;
+    }
+    next.updatedAt = new Date().toISOString();
+    reg.patients[pid] = next;
+    try { writeJsonAtomicAt(registryFile(home), reg); } catch (e) { return { ok: false, error: `写入失败：${e?.message || e}` }; }
+    return { ok: true, patient: { id: pid, ...next } };
+  });
 }
 
 /**
@@ -293,22 +324,25 @@ export function deletePatient(home, id, { confirm = false } = {}) {
   const pid = String(id || '').trim().toUpperCase();
   if (!/^P\d{3,}$/.test(pid)) return { ok: false, error: '非法的病历号' };
   if (!confirm) return { ok: false, error: '删除患者需要显式确认（confirm:true）' };
-  let reg;
-  try { reg = loadRegistryFrom(home); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
-  if (!reg.patients?.[pid]) return { ok: false, error: `病历号 ${pid} 不存在` };
+  // H-1（审计 v0.1.42）：删目录 + 摘注册表都要在锁内 —— 否则与落盘并发会留下无主病历。
+  return withRegistryLock(home, () => {
+    let reg;
+    try { reg = loadRegistryFrom(home); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    if (!reg.patients?.[pid]) return { ok: false, error: `病历号 ${pid} 不存在` };
 
-  const dir = path.join(intakeRootDir(home), pid);
-  let removed = 0;
-  try {
-    if (fs.existsSync(dir)) {
-      removed = fs.readdirSync(dir).length;
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  } catch (e) { return { ok: false, error: `病历目录删除失败：${e?.message || e}` }; }
+    const dir = path.join(intakeRootDir(home), pid);
+    let removed = 0;
+    try {
+      if (fs.existsSync(dir)) {
+        removed = fs.readdirSync(dir).length;
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    } catch (e) { return { ok: false, error: `病历目录删除失败：${e?.message || e}` }; }
 
-  delete reg.patients[pid];
-  try { writeJsonAtomicAt(registryFile(home), reg); } catch (e) { return { ok: false, error: `注册表写入失败：${e?.message || e}` }; }
-  return { ok: true, removed };
+    delete reg.patients[pid];
+    try { writeJsonAtomicAt(registryFile(home), reg); } catch (e) { return { ok: false, error: `注册表写入失败：${e?.message || e}` }; }
+    return { ok: true, removed };
+  });
 }
 
 export function registryFile(home) {
@@ -570,63 +604,76 @@ export function createPack(ctx) {
     // 兜底校验（约束引擎之外的第二层）：没有确认过的病历号一律不写
     if (!pidRaw) return { ok: false, error: '缺少 patientId——请先用 patient_lookup 确认患者，拿到病历号后再落盘（避免混病历）' };
 
-    const { reg, error } = tryRegistry();
-    if (error) return error;
-    const patient = reg.patients[pidRaw];
-    if (!patient) {
-      return {
-        ok: false,
-        error: `病历号 ${pidRaw} 不存在。若确为新患者，请先用 patient_lookup 确认身份，由系统分配病历号。现有病历号：${Object.keys(reg.patients).join('、') || '（暂无）'}`,
-      };
-    }
+    // H-1（审计 v0.1.42）：整段「读 reg → 算 visitNo → await 提取 → 写快照 + 写 reg」在跨进程锁内。
+    // 锁跨过 llmJson 的 await（几秒）：单机医疗应用下可接受，正确性优先 —— 否则两个进程
+    // 并发落盘会拿到同一个 visitNo、就诊次数少记一次（正是锁要防的「后写覆盖先写」）。
+    return withRegistryLockAsync(home, async () => {
+      const { reg, error } = tryRegistry();
+      if (error) return error;
+      const patient = reg.patients[pidRaw];
+      if (!patient) {
+        return {
+          ok: false,
+          error: `病历号 ${pidRaw} 不存在。若确为新患者，请先用 patient_lookup 确认身份，由系统分配病历号。现有病历号：${Object.keys(reg.patients).join('、') || '（暂无）'}`,
+        };
+      }
 
-    const consultText = String(args?.consultText || '').slice(0, 20000);
-    if (!consultText.trim()) return { ok: false, error: '缺少 consultText（本次问诊的医患对话原文）' };
+      const consultText = String(args?.consultText || '').slice(0, 20000);
+      if (!consultText.trim()) return { ok: false, error: '缺少 consultText（本次问诊的医患对话原文）' };
 
-    const prevFiles = listSnapshots(pidRaw);
-    const prevSnapshot = prevFiles.length ? readSnapshot(prevFiles[0]) : null;
-    const visitNo = prevFiles.length + 1;
+      const prevFiles = listSnapshots(pidRaw);
+      const prevSnapshot = prevFiles.length ? readSnapshot(prevFiles[0]) : null;
+      const visitNo = prevFiles.length + 1;
 
-    const fieldList = 'zhushu主诉(主要症状+持续时间，一句话)、xianbingshi现病史(本次发病的起因/经过/症状演变/诊治经过/现在症，逐项写全)'
-      + '；**可选八项**（有就原样记、没有就留空，**不计入 missing、不影响 complete**）：jiwangshi既往史、jiazushi家族史、guominshi过敏史、liuxingbingshi流行病史、tigejiancha体格检查、shexiang舌象（如"舌红苔黄"；若医师上传了舌象照片，可写"[舌象照片见附件]"并保留文字描述）、maixiang脉象（如"脉弦细"）、suifang随访（嘱托/复诊安排/需追踪的观察点）';
-    const extractUser = prevSnapshot
-      ? `已知该患者上次快照：${JSON.stringify(Object.fromEntries(ALL_FIELDS.map((k) => [k, String(prevSnapshot[k] || '未提及')])))}。结合患者的复诊消息，生成本次完整快照：本次未变的项沿用上次表述，本次明确变化的项用新表述（如"睡眠好多了"）。字段：${fieldList}。输出 {"complete":true,...}；若仍缺**必填**项返回 {"complete":false,"missing":[...]}。缺项绝不编造。\n\n患者复诊消息：\n${consultText}`
-      : `从下面问诊对话提取门诊病历字段。字段：${fieldList}。规则：① 对话中提及的任何疾病诊断（尤其癌症/肿瘤/糖尿病/心脏病等重大疾病，如宫颈癌）必须**原样**写进 xianbingshi（或 zhushu），绝不允许过滤、省略或概括成"慢性病"，既往确诊同样是事实要原样保留；② 两项**必填**（zhushu/xianbingshi）任一未明确出现就返回 {"complete":false,"missing":[...]}；两项齐全才返回 {"complete":true,...}；③ 缺项绝不编造，绝不用"未见异常""大致正常"填空；④ 其余八项可选，采集到就填、没采集到就留空。\n\n对话：\n${consultText}`;
+      const fieldList = 'zhushu主诉(主要症状+持续时间，一句话)、xianbingshi现病史(本次发病的起因/经过/症状演变/诊治经过/现在症，逐项写全)'
+        + '；**可选八项**（有就原样记、没有就留空，**不计入 missing、不影响 complete**）：jiwangshi既往史、jiazushi家族史、guominshi过敏史、liuxingbingshi流行病史、tigejiancha体格检查、shexiang舌象（如"舌红苔黄"；若医师上传了舌象照片，可写"[舌象照片见附件]"并保留文字描述）、maixiang脉象（如"脉弦细"）、suifang随访（嘱托/复诊安排/需追踪的观察点）';
+      const extractUser = prevSnapshot
+        ? `已知该患者上次快照：${JSON.stringify(Object.fromEntries(ALL_FIELDS.map((k) => [k, String(prevSnapshot[k] || '未提及')])))}。结合患者的复诊消息，生成本次完整快照：本次未变的项沿用上次表述，本次明确变化的项用新表述（如"睡眠好多了"）。字段：${fieldList}。输出 {"complete":true,...}；若仍缺**必填**项返回 {"complete":false,"missing":[...]}。缺项绝不编造。\n\n患者复诊消息：\n${consultText}`
+        : `从下面问诊对话提取门诊病历字段。字段：${fieldList}。规则：① 对话中提及的任何疾病诊断（尤其癌症/肿瘤/糖尿病/心脏病等重大疾病，如宫颈癌）必须**原样**写进 xianbingshi（或 zhushu），绝不允许过滤、省略或概括成"慢性病"，既往确诊同样是事实要原样保留；② 两项**必填**（zhushu/xianbingshi）任一未明确出现就返回 {"complete":false,"missing":[...]}；两项齐全才返回 {"complete":true,...}；③ 缺项绝不编造，绝不用"未见异常""大致正常"填空；④ 其余八项可选，采集到就填、没采集到就留空。\n\n对话：\n${consultText}`;
 
-    const extracted = await llmJson(toolCtx, {
-      system: '你是病历结构化提取器。只输出一个 JSON 对象。',
-      user: extractUser,
-      purpose: 'intake-extract',
-    });
+      const extracted = await llmJson(toolCtx, {
+        system: '你是病历结构化提取器。只输出一个 JSON 对象。',
+        user: extractUser,
+        purpose: 'intake-extract',
+      });
 
-    if (!extracted) {
-      return { ok: false, error: '结构化提取失败（模型未返回可解析的 JSON）。未落盘，请重试。' };
-    }
+      if (!extracted) {
+        return { ok: false, error: '结构化提取失败（模型未返回可解析的 JSON）。未落盘，请重试。' };
+      }
 
-    const fields = normalizeFields(extracted);
-    const missing = missingFields(fields);
+      const fields = normalizeFields(extracted);
+      const missing = missingFields(fields);
 
-    if (extracted.complete !== true || missing.length) {
-      // 刻意**不落盘**：半份病历比没有更危险（会被后续复诊当成上次基线）。
-      // 同时把 data 交出去，让内核的 completeness 约束再独立拦一次（双保险）。
+      if (extracted.complete !== true || missing.length) {
+        // 刻意**不落盘**：半份病历比没有更危险（会被后续复诊当成上次基线）。
+        // 同时把 data 交出去，让内核的 completeness 约束再独立拦一次（双保险）。
+        return {
+          ok: true,
+          output: `⚠ 必填项缺失：${missing.map((f) => FIELDS[f]).join('、')}。缺项绝不编造，请继续向患者采集后再落盘。`,
+          data: fields,
+        };
+      }
+
+      const file = writeIntake(pidRaw, fields, patient);
+      try {
+        patient.lastVisitAt = new Date().toISOString();
+        patient.visits = (patient.visits || 0) + 1;
+        if (!patient.birth && args?.birth) patient.birth = String(args.birth);
+        saveRegistry(reg);
+      } catch (e) {
+        // H-4（审计 v0.1.40/0.1.42）：注册表写失败时，回滚刚写的快照 —— 别留下
+        // 「快照在、注册表没登记」的中间态（下次复诊会把这次快照当上次基线、但随访状态
+        // 与就诊次数都对不上）。删不掉就明说，绝不静默装作成功。
+        try { fs.unlinkSync(file); } catch { /* 删不掉也只能留着，但下面会明确报错 */ }
+        return { ok: false, error: `病历快照落盘失败（注册表写入失败：${e?.message || e}）。已回滚本次快照，请重试。` };
+      }
+
       return {
         ok: true,
-        output: `⚠ 必填项缺失：${missing.map((f) => FIELDS[f]).join('、')}。缺项绝不编造，请继续向患者采集后再落盘。`,
-        data: fields,
+        output: `📋 病历快照已落盘｜患者 ${patient.name}${patient.birth ? `（${patient.birth}年生）` : ''}｜病历号 ${pidRaw}｜${visitLabel(visitNo)}（第 ${visitNo} 次就诊）：${path.basename(file)}（草稿·需医师确认）`,
+        data: { ...fields, __file: path.basename(file), __visitNo: visitNo },
       };
-    }
-
-    const file = writeIntake(pidRaw, fields, patient);
-    patient.lastVisitAt = new Date().toISOString();
-    patient.visits = (patient.visits || 0) + 1;
-    if (!patient.birth && args?.birth) patient.birth = String(args.birth);
-    saveRegistry(reg);
-
-    return {
-      ok: true,
-      output: `📋 病历快照已落盘｜患者 ${patient.name}${patient.birth ? `（${patient.birth}年生）` : ''}｜病历号 ${pidRaw}｜${visitLabel(visitNo)}（第 ${visitNo} 次就诊）：${path.basename(file)}（草稿·需医师确认）`,
-      data: { ...fields, __file: path.basename(file), __visitNo: visitNo },
-    };
+    });
   }
 
   function saveRegistry(reg) {

@@ -130,7 +130,8 @@ export function createProvider(pc) {
    * 不配则回落到 DeepSeek（稳，但要花一次小调用）。
    */
   function orchestrator() {
-    // 复用创建时读到的 cfgFile（配置在进程生命周期内视为不变；改配置请重启）
+    // 读 cfgFile 与 creds（闭包变量）：chat() 每次请求前会重读 config.json / credentials.json
+    // 并回写这两个变量，所以编排模型地址/模型名/Key 改完也立即生效（C-2 / M-1）。
     const o = cfgFile?.tcm?.orchestrator || {};
     const baseUrl = String(o.baseUrl || DEFAULT_ORCH_BASE).replace(/\/+$/, '');
     return {
@@ -384,6 +385,9 @@ export function createProvider(pc) {
         difyKey = String(pc.apiKey || c2.dify || '');
         difyBaseUrl = String(pc.baseUrl || f2?.tcm?.difyBaseUrl || DEFAULT_DIFY_BASE).replace(/\/+$/, '');
         cfgFile = f2;
+        // M-1（审计 v0.1.42）：creds 也必须回写 —— 编排器 `orchestrator()` 里的
+        // DeepSeek Key 读的是 `creds.deepseek`，不回写它，改 DeepSeek Key 仍然要重启。
+        creds = c2;
       } catch { /* 读不到就沿用创建时的值 */ }
       const messages = Array.isArray(opts.messages) ? opts.messages : [];
       const tools = Array.isArray(opts.tools) ? opts.tools : [];

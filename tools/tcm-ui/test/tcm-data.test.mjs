@@ -38,7 +38,7 @@ fs.writeFileSync(path.join(HOME, 'patients.json'), JSON.stringify({
   },
 }));
 writeSnap('P001', 1000, { zhushu: '失眠', xianbingshi: '三月前入睡困难' });
-writeSnap('P001', 2000, { zhushu: '失眠好转', xianbingshi: '入睡时间提前', shexiang: '舌红苔黄' });
+writeSnap('P001', 2000, { zhushu: '失眠好转', xianbingshi: '入睡时间提前', shexiang: '舌红苔黄', compare: { at: iso(0), items: [{ label: '失眠', last: '入睡困难', now: '入睡时间提前', state: '减轻' }] } });
 writeSnap('P002', 1500, { zhushu: '胃脘胀满', xianbingshi: '餐后加重' });
 writeSnap('P003', 1600, { zhushu: '咳嗽', xianbingshi: '受凉后咳嗽两周' });
 
@@ -104,6 +104,18 @@ test('★ 复诊草稿由服务端生成 —— 前端连"主诉是哪个字段"
   assert.match(d.followupDraft, /^复诊：张三，1985年生，女。/);
   assert.match(d.followupDraft, /上次主诉：失眠好转/, '应带上次主诉（取自必填首字段）');
   assert.match(d.followupDraft, /逐项对比本次变化/);
+});
+test('★ 四态对比透传（M-4）：visit_compare 固化进快照的 compare 原样回给前端', () => {
+  const d = patientDetail(HOME, 'P001');
+  const v1 = d.visits[1];                       // 二诊（case-2000 带 compare）
+  assert.ok(Array.isArray(v1.compare), 'compare 应是数组（前端直接渲染）');
+  assert.equal(v1.compare.length, 1);
+  assert.equal(v1.compare[0].label, '失眠');
+  assert.equal(v1.compare[0].state, '减轻');
+  assert.equal(v1.compare[0].last, '入睡困难');
+  assert.equal(v1.compare[0].now, '入睡时间提前');
+  // 初诊没做过对比 → 空数组（前端据此显示"尚未生成"，而不是报错）
+  assert.deepEqual(d.visits[0].compare, [], '无对比的该次就诊应回空数组');
 });
 
 console.log('\n[3] 随访提醒（主动提醒的数据源）');

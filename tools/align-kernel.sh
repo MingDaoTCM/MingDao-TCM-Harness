@@ -20,9 +20,13 @@ import re, sys
 v = sys.argv[1]
 p = 'README.md'
 s = open(p, encoding='utf-8').read()
-n = re.sub(r'v0\.\d+\.\d+', 'v' + v, s)
+# 只改「对齐 **MingDao-Harness vX.Y.Z**」这一处正式声明。
+# 早先的正则 `v0\.\d+\.\d+` 会把 README 里**所有** v0.x.y 都改掉 —— 包括历史叙述里的
+# 旧版本号（如"当天先是内核到 v0.8.1、README 还写 0.6.10"），历史记录被抹平成最新版 ✗，
+# 且硬编码 v0 前缀，内核升到 v1.x 就再也匹配不上。
+n = re.sub(r'(对齐\s*\*\*MingDao-Harness\s+v)\d+\.\d+\.\d+(\*\*)', r'\g<1>' + v + r'\g<2>', s)
 if n != s:
     open(p, 'w', encoding='utf-8').write(n)
-    print('README → v' + v)
+    print('README 对齐声明 → v' + v)
 PY
 echo "✓ 完成（记得跑门禁与 preflight 再打 tag）"
