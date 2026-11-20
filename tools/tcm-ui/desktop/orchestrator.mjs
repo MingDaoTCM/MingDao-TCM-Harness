@@ -229,6 +229,25 @@ export function pickArtifact(files, platform, arch, hint = {}) {
 }
 
 /**
+ * 从站点清单里取指定文件的 sha256（C-3 下载校验用）。
+ *
+ * **为什么单独抽成纯函数**：取 sha256 的匹配逻辑不能埋在 Electron 壳里 —— 埋进去就只能靠
+ * 正则 grep 源码"看起来调用了"，而 2026-11 就栽过一次（S-1）：`mj` 用块级 `const` 声明、
+ * 第二个 try 块引用 → ReferenceError → 更新功能在真机崩溃，静态测试却全绿。
+ * 抽成纯函数后，测试才能真正**执行**它，而不是"看见它"。
+ *
+ * @param {{name?:string, sha256?:string}[]|null|undefined} files 站点清单（/api/downloads 的 files）
+ * @param {string} name 要下载的文件名
+ * @returns {string} 匹配到的 sha256（小写）；找不到返回空串（调用方据此 fail-closed，不安装无校验的包）
+ */
+export function pickSha256(files, name) {
+  const want = String(name || '').trim();
+  if (!want) return '';
+  const hit = (Array.isArray(files) ? files : []).find((f) => f && String(f.name || '') === want);
+  return String(hit?.sha256 || '').trim().toLowerCase();
+}
+
+/**
  * 「检查更新」的**逻辑**（纯 Node，可测；Electron 那边只负责弹窗）。
  *
  * 站点侧的 `/api/latest` 免登录、且只回版本号（不泄露下载区）。

@@ -12,11 +12,10 @@
 import { app, BrowserWindow, shell, dialog, Menu, Tray, nativeImage, session } from 'electron';
 import fs from 'node:fs';
 import https from 'node:https';
-import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { APP_NAME, resolveAppRoot, resolveKernelRoot, startApp, checkForUpdate, pickArtifact } from './orchestrator.mjs';
+import { APP_NAME, resolveAppRoot, resolveKernelRoot, startApp, checkForUpdate, pickArtifact, pickSha256 } from './orchestrator.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -178,12 +177,18 @@ function downloadInstaller(url, name, onProgress, expectedSha256) {
   return new Promise((resolve, reject) => {
     const dir = path.join(app.getPath('downloads'), APP_NAME.replace(/[^\w一-龥-]/g, ''));
     fs.mkdirSync(dir, { recursive: true });
-    const dest = path.join(dir, name);
+    // M-2（审计 v0.1.42）：name 来自站点清单，虽与安装包同一信任域，但「能防就该防」——
+    // basename 挡 `../` 逃逸，再剥掉白名单外的字符（保留字母数字、点、连字符、中文）。
+    const safeName = path.basename(String(name || '')).replace(/[^\w.\u4e00-\u9fa5-]/g, '');
+    if (!safeName) { reject(new Error('安装包文件名非法，拒绝下载')); return; }
+    const dest = path.join(dir, safeName);
     const file = fs.createWriteStream(dest);
     const get = (u, depth = 0) => {
       if (depth > 5) { reject(new Error('重定向过多')); return; }
-      const mod = u.startsWith('https:') ? https : http;
-      const req = mod.get(u, { headers: { 'User-Agent': 'MingDaoTCM-Desktop' } }, (res) => {
+      // M-2：强制 https —— 安装包走明文 http 时，MITM 可无限重放/篡改；sha256 兜底的是
+      // 内容完整性，不是传输机密性。在源头就拒绝。
+      if (!u.startsWith('https:')) { reject(new Error('拒绝非 https 的下载地址：' + u)); return; }
+      const req = https.get(u, { headers: { 'User-Agent': 'MingDaoTCM-Desktop' } }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
           get(new URL(res.headers.location, u).toString(), depth + 1);
@@ -258,9 +263,12 @@ const showBox = (/** @type {any} */ opts) => dialog.showMessageBox(win ?? undefi
 
 async function installFromSite(/** @type {string} */ latest, /** @type {string} */ cur) {
   let name = '';
+  // S-1（审计 v0.1.42）：`mj` 必须是**函数级**变量，不能是第一个 try 块里的 `const`。
+  // 否则第二个 try 块引用它 → ReferenceError: mj is not defined → 更新功能在真机崩溃。
+  let mj = null;
   try {
     const mres = await fetch(`${SITE_URL}/api/downloads`, { cache: 'no-store' });
-    const mj = await mres.json();
+    mj = await mres.json();
     name = pickArtifact(mj?.files || [], process.platform, process.arch, { appImage: !!process.env.APPIMAGE });
   } catch (/** @type {any} */ e) { console.warn('[update] 取清单失败：' + (e?.message || e)); }
   if (!name) {
@@ -276,7 +284,7 @@ async function installFromSite(/** @type {string} */ latest, /** @type {string} 
   try {
     win?.setProgressBar(0.01);
     // C-3：把清单里该文件的 sha256 一起传下去，下载完先校验再交给安装程序。
-    const expectSha = String((mj?.files || []).find((f) => f.name === name)?.sha256 || '');
+    const expectSha = pickSha256(mj?.files, name);
     const dest = await downloadInstaller(`${SITE_URL}/downloads/${encodeURIComponent(name)}`, name,
       (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } }, expectSha);
     win?.setProgressBar(-1);
@@ -355,45 +363,6 @@ async function checkUpdates() {
     });
     if (pick?.response !== 0) return;
     return installFromSite(r.latest, cur);
-
-    // 按本机平台/架构从站点清单里挑对应的安装包
-    let name = '';
-    try {
-      const mres = await fetch(`${SITE_URL}/api/downloads`, { cache: 'no-store' });
-      const mj = await mres.json();
-      name = pickArtifact(mj?.files || [], process.platform, process.arch, { appImage: !!process.env.APPIMAGE });
-    } catch (/** @type {any} */ e) { console.warn('[update] 取清单失败：' + (e?.message || e)); }
-    if (!name) {
-      const x = await show({
-        type: 'warning', title: '检查更新',
-        message: `站点上找不到适配本机（${process.platform}/${process.arch}）的安装包`,
-        detail: `可以手动打开下载页选择：${SITE_URL}/`,
-        buttons: ['打开下载页', '知道了'], defaultId: 0, cancelId: 1,
-      });
-      if (x?.response === 0) openExternal(`${SITE_URL}/`);
-      return;
-    }
-
-    try {
-      win?.setProgressBar(0.01);
-      const dest = await downloadInstaller(`${SITE_URL}/downloads/${encodeURIComponent(name)}`, name,
-        (pct) => { try { win?.setProgressBar(pct / 100); } catch { /* 忽略 */ } }, String((mj?.files || []).find((f) => f.name === name)?.sha256 || ''))
-      win?.setProgressBar(-1);
-      await show({ type: 'info', title: '更新已下载', message: `v${r.latest} 已下载完成`, detail: installHint(dest) });
-      const err = await shell.openPath(dest);              // 直接打开安装程序
-      if (err) { console.warn('[update] 打开安装包失败：' + err); openExternal(`${SITE_URL}/`); }
-    } catch (/** @type {any} */ e) {
-      win?.setProgressBar(-1);
-      console.warn('[update] 下载失败：' + (e?.message || e));
-      const x = await show({
-        type: 'warning', title: '检查更新',
-        message: '下载失败',
-        detail: `原因：${e?.message || e}\n也可以手动打开下载页：${SITE_URL}/`,
-        buttons: ['打开下载页', '知道了'], defaultId: 0, cancelId: 1,
-      });
-      if (x?.response === 0) openExternal(`${SITE_URL}/`);
-    }
-    return;
   }
   if (r.status === 'current') {
     return show({

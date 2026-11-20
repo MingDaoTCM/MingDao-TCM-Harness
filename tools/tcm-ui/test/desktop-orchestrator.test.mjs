@@ -17,6 +17,7 @@ import {
   checkForUpdate,
   installLayer,
   pickArtifact,
+  pickSha256,
   REQUIRED_LAYER_FILES,
   resolveAppRoot,
   resolveKernelRoot,
@@ -162,6 +163,32 @@ await testAsync('★ 装好的 provider 必须被内核解析成 dify，而不�
   } finally {
     if (saved === undefined) delete process.env.MINGDAO_HOME; else process.env.MINGDAO_HOME = saved;
   }
+});
+
+console.log('\n[1c] 更新链路纯函数（S-1 教训：取 sha256 必须可执行，不能只靠正则 grep）');
+
+await testAsync('pickSha256：命中返回小写 sha256', () => {
+  const files = [{ name: 'a.deb', sha256: 'ABCDEF1234'.repeat(6) + 'ABCD' }];
+  assert.equal(pickSha256(files, 'a.deb'), 'abcdef1234abcdef1234abcdef1234abcdef1234abcdef1234abcdef1234abcd');
+});
+
+await testAsync('pickSha256：同名精确匹配，不因大小写/前后缀误配', () => {
+  const files = [
+    { name: 'app-x64.deb', sha256: 'a'.repeat(64) },
+    { name: 'app-x64.dmg', sha256: 'b'.repeat(64) },
+  ];
+  assert.equal(pickSha256(files, 'app-x64.deb'), 'a'.repeat(64));
+});
+
+await testAsync('pickSha256：找不到或清单为空返回空串（fail-closed 的前置）', () => {
+  assert.equal(pickSha256([{ name: 'x.deb', sha256: 'c'.repeat(64) }], 'y.deb'), '');
+  assert.equal(pickSha256(null, 'x.deb'), '');
+  assert.equal(pickSha256([], 'x.deb'), '');
+  assert.equal(pickSha256([{ name: 'x.deb' }], 'x.deb'), '', '清单缺 sha256 字段时返回空串，调用方应拒绝安装');
+});
+
+await testAsync('pickSha256：sha256 大小写归一（清单可能给大写）', () => {
+  assert.equal(pickSha256([{ name: 'a.deb', sha256: 'FF'.repeat(32) }], 'a.deb'), 'ff'.repeat(32));
 });
 
 console.log('\n[2] 端到端（真起内核 + 真起问诊台）');
