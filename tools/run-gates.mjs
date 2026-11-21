@@ -65,7 +65,10 @@ for (const g of list) {
     // 修（2026-11-21）：原来只取**最后 4 行** ✗ —— 失败测试的 `✗ 名字` 往往在更前面，
     // 于是 CI 红了却看不到"到底哪条测试挂了" ✗（v0.1.43 就是这样：只知道 64 通过 1 失败，
     // 不知道是哪一条）。现在**优先把带 ✗ 的行全部带上**，再补末尾几行上下文。
-    const lines = out.trim().split('\n').filter(Boolean);
+    // ⚠ 必须**同时按 \r 切**：pack.test 的进度行用 \r 覆盖（终端里看着是一行逐条变化），
+    // 但捕获的 stdout 里就变成**一整行** ✗ —— 之前只按 \n 切，于是只看到"最后一个 ✓ + 结果"，
+    // 真正的 ✗ 测试名被埋在同一个"行"里，永远取不到 ✗（v0.1.43 连红两轮就卡在这）。
+    const lines = out.trim().split(/\r?\n|\r/).map((l) => l.trim()).filter(Boolean);
     const badLines = lines.filter((l) => l.includes('✗'));
     const picked = [...new Set([...badLines, ...lines.slice(-4)])].slice(-12);
     const why = picked.join('\n      ') || `exit ${r.status}`;
