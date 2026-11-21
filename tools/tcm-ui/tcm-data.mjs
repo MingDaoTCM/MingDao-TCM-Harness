@@ -12,6 +12,8 @@
 import path from 'node:path';
 import {
   ALL_FIELDS,
+  DIAGNOSIS_CN,
+  DIAGNOSIS_FIELDS,
   DUE_SOON_DAYS,
   FIELD_CN,
   OVERDUE_DAYS,
@@ -24,6 +26,7 @@ import {
   listSnapshotFiles,
   loadRegistryFrom,
   readSnapshotFile,
+  recordDiagnosis,
   updatePatient,
   visitLabel,
 } from '../../layer/packs/tcm/pack.mjs';
@@ -172,6 +175,9 @@ export function patientDetail(home, id) {
       // （compare = { at, items }），这里只把 items 数组透传给前端 —— 否则落了盘却从不显示，
       // 医师看不到疗效对比就没法"效不更方"。摊平成数组，前端 `v.compare` 直接用。
       compare: Array.isArray(snap.compare?.items) ? snap.compare.items : [],
+      // 辨证（第 3 批）：医师手填的辨证字段（snap.diagnosis = { bingming,zheng,zhifa,fangyao }），
+      // 透传成 label/value 数组 —— 前端零字段知识，直接渲染。老快照无 diagnosis → 值空串（显示「未记录」）。
+      diagnosis: DIAGNOSIS_FIELDS.map((k) => ({ key: k, label: DIAGNOSIS_CN[k], value: String(snap.diagnosis?.[k] || '') })),
     });
     prev = snap;
   });
@@ -194,6 +200,15 @@ export function updatePatientRow(home, id, patch) {
   const r = updatePatient(home, id, patch || {});
   if (!r.ok) return r;
   return { ok: true, patient: r.patient };
+}
+
+/**
+ * 辨证落盘（医师手填）。走 Pack 的 recordDiagnosis —— 数据口径只有一处，
+ * 与 diagnosis_record 工具同源，只是问诊台端点不经编排器/模型直接落盘（辨证零转述）。
+ * @param {string} home @param {string} id @param {Record<string,string>} diagnosis
+ */
+export function recordDiagnosisRow(home, id, diagnosis) {
+  return recordDiagnosis(home, id, diagnosis || {});
 }
 
 /**

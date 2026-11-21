@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { roster, patientDetail, reminders } from '../tcm-data.mjs';
+import { roster, patientDetail, reminders, recordDiagnosisRow } from '../tcm-data.mjs';
 
 let passed = 0;
 let failed = 0;
@@ -38,7 +38,7 @@ fs.writeFileSync(path.join(HOME, 'patients.json'), JSON.stringify({
   },
 }));
 writeSnap('P001', 1000, { zhushu: '失眠', xianbingshi: '三月前入睡困难' });
-writeSnap('P001', 2000, { zhushu: '失眠好转', xianbingshi: '入睡时间提前', shexiang: '舌红苔黄', compare: { at: iso(0), items: [{ label: '失眠', last: '入睡困难', now: '入睡时间提前', state: '减轻' }] } });
+writeSnap('P001', 2000, { zhushu: '失眠好转', xianbingshi: '入睡时间提前', shexiang: '舌红苔黄', compare: { at: iso(0), items: [{ label: '失眠', last: '入睡困难', now: '入睡时间提前', state: '减轻' }] }, diagnosis: { bingming: '不寐', zheng: '肝郁化火证', zhifa: '疏肝泻火', fangyao: '龙胆泻肝汤加减' } });
 writeSnap('P002', 1500, { zhushu: '胃脘胀满', xianbingshi: '餐后加重' });
 writeSnap('P003', 1600, { zhushu: '咳嗽', xianbingshi: '受凉后咳嗽两周' });
 
@@ -117,6 +117,20 @@ test('★ 四态对比透传（M-4）：visit_compare 固化进快照的 compare
   // 初诊没做过对比 → 空数组（前端据此显示"尚未生成"，而不是报错）
   assert.deepEqual(d.visits[0].compare, [], '无对比的该次就诊应回空数组');
 });
+test('★ 辨证透传（第 3 批）：医师手填的 diagnosis 以 label/value 数组下发给前端', () => {
+  const d = patientDetail(HOME, 'P001');
+  const v1 = d.visits[1];                       // 二诊（case-2000 带 diagnosis）
+  assert.ok(Array.isArray(v1.diagnosis), 'diagnosis 应是数组');
+  assert.equal(v1.diagnosis.length, 4, '辨证四项：病名/证候/治法/方药');
+  const byKey = Object.fromEntries(v1.diagnosis.map((x) => [x.key, x]));
+  assert.equal(byKey.bingming.label, '病名');
+  assert.equal(byKey.bingming.value, '不寐');
+  assert.equal(byKey.zheng.value, '肝郁化火证');
+  assert.equal(byKey.zhifa.value, '疏肝泻火');
+  assert.equal(byKey.fangyao.value, '龙胆泻肝汤加减');
+  // 初诊没辨证 → 四项都在但值空串（前端显示"未记录"，而不是报错）
+  assert.deepEqual(d.visits[0].diagnosis.map((x) => x.value), ['', '', '', '']);
+});
 
 console.log('\n[3] 随访提醒（主动提醒的数据源）');
 test('只回该催的两类：超期 + 临期（正常/未就诊不进提醒）', () => {
@@ -179,6 +193,23 @@ test('全新 home（无注册表）→ 空名册，不报错', () => {
   assert.equal(r.patients.length, 0);
   assert.equal(reminders(FRESH).counts.overdue, 0);
   fs.rmSync(FRESH, { recursive: true, force: true });
+});
+
+console.log('\n[5] 辨证落盘（第 3 批：医师手填，直连落盘不经模型）');
+test('★ recordDiagnosisRow：辨证原样写进最近快照，patientDetail 读回', () => {
+  const r = recordDiagnosisRow(HOME, 'P002', { bingming: '胃脘痛', zheng: '脾胃虚寒证', zhifa: '温中散寒' });
+  assert.equal(r.ok, true, r.error);
+  const d = patientDetail(HOME, 'P002');
+  const v0 = d.visits[0];
+  const byKey = Object.fromEntries(v0.diagnosis.map((x) => [x.key, x]));
+  assert.equal(byKey.bingming.value, '胃脘痛');
+  assert.equal(byKey.zheng.value, '脾胃虚寒证');
+  assert.equal(byKey.zhifa.value, '温中散寒');
+  assert.equal(byKey.fangyao.value, '', '未填的方药应为空串');
+});
+test('recordDiagnosisRow：无辨证内容 / 病历号不存在 → 拒绝（防串病历第二层）', () => {
+  assert.equal(recordDiagnosisRow(HOME, 'P002', {}).ok, false, '无内容必须拒绝');
+  assert.equal(recordDiagnosisRow(HOME, 'P999', { zheng: 'X证' }).ok, false, '病历号不存在必须拒绝');
 });
 
 fs.rmSync(HOME, { recursive: true, force: true });

@@ -53,9 +53,9 @@ layer/packs/tcm/
 
 ## 三、能力面
 
-### 工具（5 个，内核注册名自动加前缀）
+### 工具（6 个，内核注册名自动加前缀）
 
-> 计数写 **5**：这是 `pack.mjs` 里 `tools[]` 的真实长度，
+> 计数写 **6**：这是 `pack.mjs` 里 `tools[]` 的真实长度，
 > `tools/doc-lint.mjs` 的 INV-1 会拿它跟代码比对 —— 加/删工具后忘了改这里会当场红。
 
 | 工具 | 注册名 | 读/写 | 职责 |
@@ -64,6 +64,7 @@ layer/packs/tcm/
 | `patient_register` | `pack__tcm__patient_register` | **写** | 登记新患者并分配病历号；**同名已存在时拒绝登记**，把候选交回医师 |
 | `intake_collect` | `pack__tcm__intake_collect` | **写** | 门诊病历结构化 + 病历落盘；**必填齐全才写**，缺项回报"请继续采集" |
 | `visit_compare` | `pack__tcm__visit_compare` | 只读 | 复诊四态对比（消失/减轻/无变化/加重），只陈述事实 |
+| `diagnosis_record` | `pack__tcm__diagnosis_record` | **写** | 医师给出的辨证（病名/证候/治法/方药）**原样落盘**；只记录、不生成辨证 |
 | `followup_board` | `pack__tcm__followup_board` | 只读 | 回访看板 / 单患者时间线趋势 + 异常预警 + 随访话术草稿 |
 
 > 为什么比迁移指南多了两个工具（指南只列了三个）：
@@ -84,9 +85,14 @@ layer/packs/tcm/
 |---|---|
 | **必填（2）** | `zhushu` 主诉 · `xianbingshi` 现病史 |
 | **可选（8）** | `jiwangshi` 既往史 · `jiazushi` 家族史 · `guominshi` 过敏史 · `liuxingbingshi` 流行病史 · `tigejiancha` 体格检查 · `shexiang` 舌象 · `maixiang` 脉象 · `suifang` 随访 |
+| **辨证（4，医师手填）** | `bingming` 病名 · `zheng` 证候 · `zhifa` 治法 · `fangyao` 方药 |
 
 原十问（寒热/汗/头身/二便/饮食/胸腹/口渴/旧病）是**问诊采集清单**，现在改成**门诊病历结构**。
 「重大疾病必须原样保留」这条硬规则从 `zhenduan` 移到了 `xianbingshi`，语义不变。
+
+**辨证侧（病名/证候/治法/方药）与症状侧分开**：它们是**执业医师的判断**，由 `diagnosis_record`
+原样落盘、**绝不经过模型提取**（否则就是「系统自动辨证」，违反红线）。它们不进四态对比、不进
+「上次病历」注入块——因为证候是诊断、不是症状。字段全集唯一定义处：`pack.mjs` 的 `DIAGNOSIS_FIELDS` + `DIAGNOSIS_CN`。
 
 **病历号不再由医师输入**：复诊由 `patient_lookup` 按姓名/出生年/性别提取历史病历号，
 初诊由 `patient_register` 自动分配；同名多命中一律返回候选请医师确认。

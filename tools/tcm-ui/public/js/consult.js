@@ -76,11 +76,19 @@ const toolLabel = (raw) => {
   const bare = s.startsWith('pack__') ? s.split('__').slice(2).join('__') : s;
   return TOOL_LABEL[bare] || bare;
 };
+/** 拿裸工具名（不含 pack__<pack>__ 前缀），用于判断「这一轮发生了什么工具」 */
+const bareTool = (raw) => {
+  const s = String(raw || '');
+  return s.startsWith('pack__') ? s.split('__').slice(2).join('__') : s;
+};
 
 let session = null;
 let generating = false;
 let ctrl = null;
 let pendingAttachments = [];
+// 当前接诊患者的病历号（第 3 批：辨证落盘要用它定位「最近一次快照」）。
+// 由 patient_register / patient_lookup 的工具结果回填，换患者（clearForm）时清空。
+let currentPid = null;
 
 // ── 每轮回复：工具区（上） + 问诊正文（下） ─────────────────
 function addTurn(userText, hasAttachment) {
@@ -113,6 +121,39 @@ function toolCard(turn, rawName) {
 }
 
 function scroll() { const c = $('#conv'); c.scrollTop = c.scrollHeight; }
+
+/**
+ * 辨证落盘（第 3 批）：病历落盘成功后，把医师在「辨证」区填的病名/证候/治法/方药
+ * **直接 POST 到问诊台端点**原样落盘 —— 不经编排器、不经模型（辨证是医师判断，零转述）。
+ * 失败只提示、不阻断问诊正文（辨证可以之后补，但不能因为辨证失败丢掉整轮问诊）。
+ */
+async function flushDiagnosis(pid) {
+  const diag = {
+    bingming: ($('#d_bingming')?.value || '').trim(),
+    zheng: ($('#d_zheng')?.value || '').trim(),
+    zhifa: ($('#d_zhifa')?.value || '').trim(),
+    fangyao: ($('#d_fangyao')?.value || '').trim(),
+  };
+  const hasAny = Object.values(diag).some(Boolean);
+  if (!hasAny || !pid) return;
+  try {
+    const r = await postJSON('/api/tcm/patients/' + encodeURIComponent(pid) + '/diagnosis', diag);
+    if (r && r.ok) {
+      // 成功后清空辨证区，避免下一位患者复用上一位的辨证（隐私 + 串病历）
+      for (const id of ['d_bingming', 'd_zheng', 'd_zhifa', 'd_fangyao']) { const el = $('#' + id); if (el) el.value = ''; }
+    } else {
+      const err = (r && r.error) || '未知错误';
+      const d = document.createElement('div'); d.className = 'errline';
+      d.textContent = '辨证未落盘：' + err + '（可稍后在病历详情补录）';
+      $('#conv')?.appendChild(d); scroll();
+    }
+  } catch (e) {
+    // 辨证落盘失败不阻断问诊，只留一行提示
+    const d = document.createElement('div'); d.className = 'errline';
+    d.textContent = '辨证落盘失败：' + (e?.message || e) + '（可稍后在病历详情补录）';
+    $('#conv')?.appendChild(d); scroll();
+  }
+}
 
 async function send(text, attachments) {
   if (generating) return;
@@ -187,6 +228,11 @@ async function handleEvent(ev, turn, body, cards, pushText, T, R) {
       st.textContent = (ok ? '✓' : '✖') + (ev.durationMs != null ? ' ' + ev.durationMs + 'ms' : '');
       if (r.output) { const pre = document.createElement('pre'); pre.textContent = String(r.output).slice(0, 2000); card.appendChild(pre); }
       if (r.error) { const pre = document.createElement('pre'); pre.style.color = 'var(--err)'; pre.textContent = String(r.error); card.appendChild(pre); }
+      // 第 3 批：追踪病历号，落盘成功后把医师填的辨证一并落盘（不经模型）
+      const bare = bareTool(ev.name);
+      if (ok && bare === 'patient_register' && r.data?.patientId) currentPid = r.data.patientId;
+      else if (ok && bare === 'patient_lookup' && r.data?.patient?.id) currentPid = r.data.patient.id;
+      else if (ok && bare === 'intake_collect') await flushDiagnosis(currentPid);
       scroll();
       break;
     }
@@ -724,8 +770,10 @@ export function initConsult() {
     // S-1（审计 2026-11）：清空表单 = 换患者 → 必须**同时复位会话** ✗
     //   否则上一位患者的 Dify 会话上下文会被下一位沿用（隐私跨患者泄露）。
     session = null;
+    currentPid = null;   // 第 3 批：病历号也随换患者复位，避免辨证落盘串到上一位患者
     { const h = document.getElementById('hint'); if (h) h.textContent = '每轮回复：上方是工具执行区，下方是问诊工作流正文。'; }
     for (const id of ['f_zhushu', 'f_xianbingshi', ...OPT_FIELDS.map(([k]) => 'f_' + k)]) { const el = $('#' + id); if (el) el.value = ''; }
+    for (const id of ['d_bingming', 'd_zheng', 'd_zhifa', 'd_fangyao']) { const el = $('#' + id); if (el) el.value = ''; }
     for (const id of ['pName', 'pBirth']) $('#' + id).value = '';
     $('#pSex').value = ''; $('#pKind').value = 'auto';
     clearAttachment();

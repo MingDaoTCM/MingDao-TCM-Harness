@@ -76,6 +76,20 @@ export const FIELD_CN = {
 };
 
 /**
+ * 辨证侧字段（病名 / 证候 / 治法 / 方药）—— **医师手填、原样落盘**。
+ *
+ * 为什么**不**并进 `ALL_FIELDS`（第 3 批方案，2026-11）：
+ *   `ALL_FIELDS` 有两层隐含语义 —— ① `llmJson` 从对话**提取**（加进去模型会「自动辨证」，
+ *   违反「不做诊断结论」红线 ✗）；② `visit_compare` 逐项**四态对比**（加进去会把
+ *   「证候从无到有」判成「加重」，而证候是诊断、不是症状 ✗）。
+ *   辨证侧必须独立：只由医师填写、只用于显示与疗效归因，**不进提取、不进四态对比**。
+ */
+export const DIAGNOSIS_FIELDS = ['bingming', 'zheng', 'zhifa', 'fangyao'];
+
+/** 辨证字段中文短名（与 FIELD_CN 同源：字段语义的唯一定义处） */
+export const DIAGNOSIS_CN = { bingming: '病名', zheng: '证候', zhifa: '治法', fangyao: '方药' };
+
+/**
  * 把一份病历快照渲染成可注入上下文的「上次病历」中文块。
  * 键集严格取自 `ALL_FIELDS`、标签取自 `FIELD_CN` —— 新增字段若忘了加标签，
  * `pack.test.mjs` 的字段契约断言会当场失败（而不是静默丢掉一个字段）。
@@ -343,6 +357,50 @@ export function deletePatient(home, id, { confirm = false } = {}) {
     try { writeJsonAtomicAt(registryFile(home), reg); } catch (e) { return { ok: false, error: `注册表写入失败：${e?.message || e}` }; }
     return { ok: true, removed };
   });
+}
+
+/**
+ * 辨证落盘：把医师给出的辨证（病名/证候/治法/方药）**原样**写进**最近一次**病历快照。
+ *
+ * 为什么是模块级导出（不是 createPack 闭包内）：
+ *   问诊台（tools/tcm-ui）要复用同一份写语义 —— 医师在界面上手填辨证后，由 /api/tcm
+ *   端点调用本函数落盘，**不经编排器、不经模型**（辨证是执业医师的判断，零转述）。
+ *   与 updatePatient / deletePatient 同源：写 intake/** 的语义只有一个定义处，别抄两份。
+ *
+ * 合并而非覆盖：可分批补录（先证候后方药），空字段跳过，绝不编造占位。
+ * @param {string} home MINGDAO_HOME
+ * @param {string} id 病历号
+ * @param {Record<string,string>} diagnosis 辨证字段（只取 DIAGNOSIS_FIELDS 里非空的）
+ * @returns {{ok:true, patient:{id:string,name:string}, __file:string, diagnosis:Record<string,string>} | {ok:false, error:string}}
+ */
+export function recordDiagnosis(home, id, diagnosis = {}) {
+  const pid = String(id || '').trim().toUpperCase();
+  if (!/^P\d{3,}$/.test(pid)) return { ok: false, error: '非法的病历号' };
+
+  const filled = {};
+  for (const k of DIAGNOSIS_FIELDS) {
+    const v = String(diagnosis?.[k] ?? '').trim();
+    if (v) filled[k] = v;
+  }
+  if (!Object.keys(filled).length) {
+    return { ok: false, error: '未提供任何辨证内容（病名/证候/治法/方药至少填一项）' };
+  }
+
+  let reg;
+  try { reg = loadRegistryFrom(home); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  const patient = reg.patients[pid];
+  if (!patient) return { ok: false, error: `病历号 ${pid} 不存在` };
+
+  const files = listSnapshotFiles(home, pid); // 最新在前
+  if (!files.length) {
+    return { ok: false, error: `患者 ${patient.name}（${pid}）还没有病历快照，请先落盘病历再补辨证。` };
+  }
+
+  const cur = readSnapshotFile(files[0]) || {};
+  cur.diagnosis = { ...(cur.diagnosis || {}), ...filled, at: new Date().toISOString() };
+  try { writeJsonAtomicAt(files[0], cur); } catch (e) { return { ok: false, error: `辨证落盘失败：${e?.message || e}` }; }
+
+  return { ok: true, patient: { id: pid, name: patient.name }, __file: path.basename(files[0]), diagnosis: filled };
 }
 
 export function registryFile(home) {
@@ -773,7 +831,29 @@ export function createPack(ctx) {
     };
   }
 
-  // ───────── 工具四：回访看板 / 单患者随访（读） ─────────
+  // ───────── 工具四：辨证落盘（写）—— 医师手填，系统只记录不生成 ─────────
+  // 为什么单独一个工具（第 3 批，2026-11）：
+  //   辨证（病名/证候/治法/方药）是**执业医师的判断**，不是「从对话提取的事实」。
+  //   它必须原样来自医师、**绝不经过 llmJson** —— 否则就是「系统自动辨证」，违反红线。
+  //   落盘到**最近一次**病历快照的 diagnosis 字段：同一次就诊的症状与辨证在同一份快照里。
+  async function diagnosisRecord(args, toolCtx) {
+    const pid = String(args?.patientId || '').trim().toUpperCase();
+    if (!pid) return { ok: false, error: '缺少 patientId —— 请先用 patient_lookup 确认患者（避免混病历）' };
+
+    // 写语义只有一个定义处：模块级 recordDiagnosis。工具与问诊台端点共用它，
+    // 保证「医师手填辨证」无论走编排器还是走端点，落盘口径完全一致。
+    const r = recordDiagnosis(home, pid, args);
+    if (!r.ok) return r;
+
+    const filled = DIAGNOSIS_FIELDS.filter((k) => r.diagnosis[k]).map((k) => `${DIAGNOSIS_CN[k]}：${r.diagnosis[k]}`).join('；');
+    return {
+      ok: true,
+      output: `📋 辨证已记录｜患者 ${r.patient.name}（${pid}）｜${filled}`,
+      data: { patientId: pid, diagnosis: r.diagnosis, __file: r.__file },
+    };
+  }
+
+  // ───────── 工具五：回访看板 / 单患者随访（读） ─────────
   async function followupBoard(args, toolCtx) {
     const target = String(args?.patientId || args?.target || '').trim();
     const { reg, error } = tryRegistry();
@@ -928,6 +1008,26 @@ export function createPack(ctx) {
         run: (args, toolCtx) => visitCompare(args, toolCtx),
       },
       {
+        name: 'diagnosis_record',
+        description:
+          '辨证落盘：把医师给出的辨证（病名/证候/治法/方药）**原样记录**进最近一次病历快照。' +
+          '这些是**执业医师的判断**，必须来自医师，**不得由模型自行推断或生成**——只记录、不辨证。' +
+          '应在 intake_collect 落盘本次快照之后、由医师明确给出辨证时调用。空字段会被跳过。',
+        parameters: {
+          type: 'object',
+          properties: {
+            patientId: { type: 'string', description: '已确认的病历号，如 P001' },
+            bingming: { type: 'string', description: '病名（中医病名，如「胃脘痛」）' },
+            zheng: { type: 'string', description: '证候（如「脾胃虚寒证」）' },
+            zhifa: { type: 'string', description: '治法（如「温中散寒，健脾和胃」）' },
+            fangyao: { type: 'string', description: '方药（如「理中丸加减」）' },
+          },
+          required: ['patientId'],
+        },
+        readOnly: false,
+        run: diagnosisRecord,
+      },
+      {
         name: 'followup_board',
         description:
           '回访追踪：不带参数时给出全部患者的回访看板与超期未复诊预警；带 patientId 或姓名时给出该患者的' +
@@ -947,6 +1047,7 @@ export function createPack(ctx) {
       // 红线一：不得跨患者串病历 —— 没有确认病历号的写入一律拒绝（比原来「仅同名多命中时拒绝」更强）
       { id: 'no-cross-patient-intake', kind: 'tool-arg-require', tool: 'intake_collect', requireArg: 'patientId', action: 'block' },
       { id: 'no-cross-patient-compare', kind: 'tool-arg-require', tool: 'visit_compare', requireArg: 'patientId', action: 'block' },
+      { id: 'no-cross-patient-diagnosis', kind: 'tool-arg-require', tool: 'diagnosis_record', requireArg: 'patientId', action: 'block' },
       // 红线二：缺项绝不编造 —— 主诉/现病史缺任一项即拒绝该结果，要求模型继续采集
       { id: 'ten-questions-complete', kind: 'completeness', tool: 'intake_collect', fields: REQUIRED_FIELDS, onMissing: 'reject' },
       // 红线三：不输出诊疗结论 —— 只判「疗效结论」，刻意不含「确诊为」：

@@ -135,6 +135,14 @@
       <h3>随访<span class="opt">可选</span></h3>
       <div class="field"><textarea id="f_suifang" placeholder="两周后复诊；嘱记录睡眠日记"></textarea></div>
 
+      <h3>辨证 · 治法 · 方药<span class="opt">医师判断 · 可选</span></h3>
+      <!-- 第 3 批：辨证是执业医师的判断，由医师手填、原样落盘（不经模型）。
+           系统只记录不生成 —— 这里绝不做证型推荐、不给治法方药建议。 -->
+      <div class="field"><label>病名</label><input id="d_bingming" type="text" placeholder="如：胃脘痛" /></div>
+      <div class="field"><label>证候</label><input id="d_zheng" type="text" placeholder="如：脾胃虚寒证" /></div>
+      <div class="field"><label>治法</label><input id="d_zhifa" type="text" placeholder="如：温中散寒，健脾和胃" /></div>
+      <div class="field"><label>方药</label><input id="d_fangyao" type="text" placeholder="如：理中丸加减" /></div>
+
       <!-- 3.4 吸底操作条：主操作常驻屏幕底部，填表时不用滚动去找 -->
       </div>
       <!-- 操作条在滚动区**之外**：任何滚动位置都常驻（sticky 只能"滚到时钉住"，不够） -->

@@ -93,6 +93,19 @@ test('问诊表单：OPT_FIELDS 的每个键都在 index.html 有对应控件（
   for (const k of optKeys) assert.ok(htmlKeys.has(k), `OPT_FIELDS 里的 ${k} 在 index.html 没有 #f_${k} 控件`);
   for (const k of ['zhushu', 'xianbingshi']) assert.ok(htmlKeys.has(k), `必填字段 ${k} 缺少控件`);
 });
+test('★ 辨证输入面：d_* 四控件都在，且不进 composeMessage（辨证经 flushDiagnosis 直连、不经模型）', () => {
+  // 第 3 批：辨证是医师判断，必须直连端点落盘（零转述）。
+  // 两条都要守：① 控件存在（否则填不了）；② 不进 composeMessage（否则会被塞进 consultText 让模型"提取辨证"）。
+  const h = html();
+  for (const k of ['bingming', 'zheng', 'zhifa', 'fangyao']) {
+    assert.ok(h.includes(`id="d_${k}"`), `index.html 应有 #d_${k} 控件`);
+  }
+  const js = read(path.join(JS_DIR, 'consult.js'));
+  const cm = /function composeMessage\(([\s\S]*?)\n\}/.exec(js);
+  assert.ok(cm, 'consult.js 应有 composeMessage');
+  assert.ok(!/d_bingming|d_zheng|d_zhifa|d_fangyao/.test(cm[0]), '辨证字段不得进 composeMessage（应经 flushDiagnosis 直连落盘）');
+  assert.ok(/flushDiagnosis/.test(js), 'consult.js 应有 flushDiagnosis（辨证直连落盘）');
+});
 
 
 test('★ 摄像头权限：request 与 check 两个处理器都必须设（Electron>=20 只设 request 会拿 NotAllowedError）', () => {

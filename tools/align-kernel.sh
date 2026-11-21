@@ -30,3 +30,38 @@ if n != s:
     print('README 对齐声明 → v' + v)
 PY
 echo "✓ 完成（记得跑门禁与 preflight 再打 tag）"
+
+# ── engines 窗口校验（2026-11-21 加）──
+# 为什么必须有：窗口写成 ">=0.5 <0.7" 时，内核一旦到 0.8.1，
+# 内核会**拒绝挂载整个垂域层** ✗，而哨兵的报错是「只有 1 个工具」——离根因很远 ✗。
+# 这条检查让"窗口过期"在**对齐当时**就红，而不是等到发版前。
+python3 - "$VER" <<'PY2'
+import json, re, sys, glob
+ver = sys.argv[1]
+cur = tuple(int(x) for x in (ver.split('.') + ['0', '0'])[:3])
+bad = []
+for mf in glob.glob('layer/packs/*/pack.json'):
+    try: m = json.load(open(mf, encoding='utf-8'))
+    except Exception as e: bad.append(f'{mf}: 解析失败 {e}'); continue
+    win = str(((m.get('engines') or {}).get('mingdao')) or '')
+    ok = True
+    for part in win.split():
+        mm = re.match(r'^([<>]=?|=)?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$', part.strip())
+        if not mm: continue
+        op = mm.group(1) or '='
+        a = int(mm.group(2)); b = int(mm.group(3) or 0); c = int(mm.group(4) or 0)
+        t = (a, b, c)
+        if op == '>=' and not (cur >= t): ok = False
+        elif op == '>' and not (cur > t): ok = False
+        elif op == '<=' and not (cur <= t): ok = False
+        elif op == '<' and not (cur < t): ok = False
+        elif op == '=' and not (cur == t): ok = False
+    if not ok:
+        bad.append(f'{mf}: engines.mingdao="{win}" 不含当前内核 {ver}')
+if bad:
+    print('✗ engines 窗口与内核对不上（内核会拒绝挂载整个垂垂域层）：')
+    for b in bad: print('  ' + b)
+    print('  修：把窗口放宽到覆盖当前内核后重跑。')
+    sys.exit(1)
+print('✓ engines 窗口覆盖当前内核 ' + ver)
+PY2

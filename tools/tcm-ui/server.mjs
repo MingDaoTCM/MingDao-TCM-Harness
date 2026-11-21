@@ -23,7 +23,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { roster, patientDetail, reminders, updatePatientRow, deletePatientRow } from './tcm-data.mjs';
+import { roster, patientDetail, reminders, updatePatientRow, deletePatientRow, recordDiagnosisRow } from './tcm-data.mjs';
 import { readSettings, writeSettings } from './settings.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -194,6 +194,19 @@ if (u.pathname === '/api/tcm/models') {
     if (u.pathname === '/api/tcm/reminders') {
       const r = reminders(home);
       json(res, r.ok ? 200 : 500, r);
+      return;
+    }
+    // 辨证落盘（医师手填，不经编排器/模型）：POST /api/tcm/patients/<pid>/diagnosis
+    // 为什么独立于上面的 /api/tcm/patients/<pid>：辨证是医师判断，必须零转述直接落盘，
+    // 不能走「改患者」那条（那是动注册表，这是动最近一次病历快照）。
+    const dm = /^\/api\/tcm\/patients\/(.+)\/diagnosis$/.exec(u.pathname);
+    if (dm && req.method === 'POST') {
+      readBody(req).then((raw) => {
+        let body = null;
+        try { body = JSON.parse(raw || '{}'); } catch { json(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
+        const r = recordDiagnosisRow(home, decodeURIComponent(dm[1]), body || {});
+        json(res, r.ok ? 200 : 400, r);
+      }).catch((e) => json(res, 400, { ok: false, error: String(e?.message || e) }));
       return;
     }
     const m = /^\/api\/tcm\/patients\/(.+)$/.exec(u.pathname);

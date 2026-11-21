@@ -27,7 +27,7 @@ async function testAsync(name, fn) {
 
 // ── 载入被测 Pack（用临时 home，绝不碰真实患者数据） ──
 const TMP_HOME = path.join(process.env.TMPDIR || '/tmp', `tcm-pack-test-${process.pid}`);
-const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, renderVisitBlock, followupStatus, OVERDUE_DAYS, DUE_SOON_DAYS, STATUS_RANK, STATUS_CN, updatePatient, deletePatient, listSnapshotFiles, withRegistryLock, withRegistryLockAsync, registryFile } =
+const { createPack, matchPatient, missingFields, normalizeFields, visitLabel, daysSince, REQUIRED_FIELDS, ALL_FIELDS, FIELD_CN, DIAGNOSIS_FIELDS, DIAGNOSIS_CN, renderVisitBlock, followupStatus, OVERDUE_DAYS, DUE_SOON_DAYS, STATUS_RANK, STATUS_CN, updatePatient, deletePatient, listSnapshotFiles, withRegistryLock, withRegistryLockAsync, registryFile } =
   await import(path.join(PACK_DIR, 'pack.mjs'));
 
 const pack = createPack({ home: TMP_HOME, packDir: PACK_DIR, packName: 'tcm', log: () => {} });
@@ -108,6 +108,14 @@ test('★ 字段契约：中文标签与 ALL_FIELDS 一一对应（增删字段�
     'FIELD_CN 必须与 ALL_FIELDS 完全一致 —— 少一个标签就会让该字段在「上次病历」里静默消失');
 });
 
+test('★ 辨证字段契约：DIAGNOSIS_CN 与 DIAGNOSIS_FIELDS 一一对应，且与症状侧绝不重叠', () => {
+  assert.deepEqual(Object.keys(DIAGNOSIS_CN).sort(), [...DIAGNOSIS_FIELDS].sort(),
+    'DIAGNOSIS_CN 必须与 DIAGNOSIS_FIELDS 完全一致');
+  assert.deepEqual(DIAGNOSIS_FIELDS, ['bingming', 'zheng', 'zhifa', 'fangyao'], '辨证四项顺序固定');
+  const overlap = DIAGNOSIS_FIELDS.filter((k) => ALL_FIELDS.includes(k));
+  assert.equal(overlap.length, 0, `辨证字段不得混进 ALL_FIELDS（会污染四态对比与模型提取）：${overlap.join(',')}`);
+});
+
 test('★ 渲染块覆盖全部字段，且不含旧十问字段名（复诊失真回归）', () => {
   const snap = Object.fromEntries(ALL_FIELDS.map((k) => [k, `${k}-值`]));
   const block = renderVisitBlock(snap);
@@ -132,12 +140,13 @@ test('渲染块：空/未定义快照不抛错（调用方按「无上次病历�
 });
 
 console.log('\n[2] 工具契约');
-test('五个工具齐备且声明了正确读写属性', () => {
+test('六个工具齐备且声明了正确读写属性', () => {
   const names = pack.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['followup_board', 'intake_collect', 'patient_lookup', 'patient_register', 'visit_compare']);
+  assert.deepEqual(names, ['diagnosis_record', 'followup_board', 'intake_collect', 'patient_lookup', 'patient_register', 'visit_compare']);
   const ro = Object.fromEntries(pack.tools.map((t) => [t.name, t.readOnly]));
   assert.equal(ro.intake_collect, false, '落盘工具必须是写类（才进权限引擎的写判定）');
   assert.equal(ro.patient_register, false, '登记新患者会改注册表，必须是写类');
+  assert.equal(ro.diagnosis_record, false, '辨证落盘会改快照，必须是写类');
   assert.equal(ro.patient_lookup, true, '定位患者不得写任何东西');
   assert.equal(ro.visit_compare, true);
   assert.equal(ro.followup_board, true);
@@ -145,6 +154,10 @@ test('五个工具齐备且声明了正确读写属性', () => {
 test('intake_collect 的 schema 要求 patientId（模型侧第一道）', () => {
   const t = pack.tools.find((x) => x.name === 'intake_collect');
   assert.ok(t.parameters.required.includes('patientId'));
+});
+test('diagnosis_record 的 schema 要求 patientId（辨证也要防串病历）', () => {
+  const t = pack.tools.find((x) => x.name === 'diagnosis_record');
+  assert.ok(t.parameters.required.includes('patientId'), '辨证落盘必须带已确认病历号');
 });
 await testAsync('缺少 patientId 时工具自身也拒绝（约束之外的第二层）', async () => {
   const t = pack.tools.find((x) => x.name === 'intake_collect');
@@ -327,6 +340,40 @@ await testAsync('intake_collect：必填齐全 → 落盘 + 注册表更新 + so
   assert.equal(snap.xianbingshi, F.xianbingshi, '重大疾病诊断（宫颈癌）必须原样落盘');
   assert.equal(snap.source, 'tcm-pack');
   assert.equal(snap.patientId, 'P001');
+});
+
+await testAsync('diagnosis_record：辨证原样落盘进最近快照（不经模型，只记录不生成）', async () => {
+  const r = await tool('diagnosis_record').run(
+    { patientId: 'P001', bingming: '不寐', zheng: '肝郁化火证', zhifa: '疏肝泻火，镇心安神', fangyao: '龙胆泻肝汤加减' },
+    stub({}),  // 辨证工具不调 llm，桩传空也不影响
+  );
+  assert.equal(r.ok, true, r.error);
+  assert.ok(String(r.output).includes('辨证已记录'), '输出应点明已记录');
+  const snap = JSON.parse(fs.readFileSync(path.join(TMP_HOME, 'intake', 'P001', snapshotFiles('P001')[0]), 'utf8'));
+  assert.equal(snap.diagnosis.bingming, '不寐');
+  assert.equal(snap.diagnosis.zheng, '肝郁化火证');
+  assert.equal(snap.diagnosis.zhifa, '疏肝泻火，镇心安神');
+  assert.equal(snap.diagnosis.fangyao, '龙胆泻肝汤加减');
+  assert.ok(snap.diagnosis.at, '应记录辨证时间');
+});
+
+await testAsync('diagnosis_record：分批补录合并，不覆盖已有辨证（空字段跳过）', async () => {
+  // 只给 zhifa（治法），已落盘的证候/病名不得被空字段覆盖
+  const r = await tool('diagnosis_record').run({ patientId: 'P001', zhifa: '疏肝清热' }, stub({}));
+  assert.equal(r.ok, true);
+  const snap = JSON.parse(fs.readFileSync(path.join(TMP_HOME, 'intake', 'P001', snapshotFiles('P001')[0]), 'utf8'));
+  assert.equal(snap.diagnosis.zheng, '肝郁化火证', '已有证候不得被空字段覆盖');
+  assert.equal(snap.diagnosis.bingming, '不寐', '已有病名不得被空字段覆盖');
+  assert.equal(snap.diagnosis.zhifa, '疏肝清热', '新治法应更新');
+});
+
+await testAsync('diagnosis_record：无 patientId / 病历号不存在 → 拒绝（防串病历第二层）', async () => {
+  const r1 = await tool('diagnosis_record').run({ zheng: 'X证' }, stub({}));
+  assert.equal(r1.ok, false, '无病历号必须拒绝');
+  const r2 = await tool('diagnosis_record').run({ patientId: 'P999', zheng: 'X证' }, stub({}));
+  assert.equal(r2.ok, false, '病历号不存在必须拒绝');
+  const r3 = await tool('diagnosis_record').run({ patientId: 'P001' }, stub({}));
+  assert.equal(r3.ok, false, '未提供任何辨证内容必须拒绝');
 });
 
 await testAsync('patient_lookup：已有患者 → found，且给出本次为第 2 次就诊', async () => {

@@ -18,7 +18,7 @@ Line B  MingDao-TCM-Harness     中医垂域层（本仓库，私有）
 
 | 扩展点 | 安装位置 | 本层用它做什么 |
 |---|---|---|
-| 垂域 Pack | `$MINGDAO_HOME/packs/tcm/` | 5 个域工具 + 4 条红线约束 + 1 段领域提示词（**域能力的主体**） |
+| 垂域 Pack | `$MINGDAO_HOME/packs/tcm/` | 6 个域工具 + 4 条红线约束 + 1 段领域提示词（**域能力的主体**） |
 | 自定义 Provider | `$MINGDAO_HOME/providers/dify.mjs` | Dify 主问诊 + 每轮的工具编排判定（**路线 A**） |
 | 独立问诊台 | `tools/tcm-ui/` | 自建前端 + 零依赖薄代理，消费内核文档化的 SSE 契约 |
 
@@ -91,10 +91,10 @@ Dify 用 `sys.dialogue_count`（会话轮次）猜「第几诊」会错位（会
 <上次病历块>
 ```
 
-## 四、5 个 Pack 工具
+## 四、6 个 Pack 工具
 
-> 标题里的 **5** 是 `pack.mjs` 里 `tools[]` 的真实长度；`tools/doc-lint.mjs` 的 INV-1 会比对它。
-> 用阿拉伯数字而不是「五」，就是为了让它可被机器核对 —— 中文数字没有稳定模式可匹配。
+> 标题里的 **6** 是 `pack.mjs` 里 `tools[]` 的真实长度；`tools/doc-lint.mjs` 的 INV-1 会比对它。
+> 用阿拉伯数字而不是「六」，就是为了让它可被机器核对 —— 中文数字没有稳定模式可匹配。
 
 工具注册名由内核自动加前缀，形如 `pack__tcm__<name>`。
 
@@ -104,13 +104,14 @@ Dify 用 `sys.dialogue_count`（会话轮次）猜「第几诊」会错位（会
 | `patient_register` | 写 | 登记新患者并分配病历号；同名已存在则**拒绝登记** | — |
 | `intake_collect` | 写 | 结构化落盘；**必填齐全才写**（缺项回报「请继续采集」） | 缺项绝不编造 |
 | `visit_compare` | 只读 | 复诊四态对比（消失 / 减轻 / 无变化 / 加重） | 只陈述事实，不判疗效 |
+| `diagnosis_record` | 写 | 医师给出的辨证（病名/证候/治法/方药）**原样落盘** | 只记录、不生成辨证 |
 | `followup_board` | 只读 | 回访看板 / 单患者时间线 + 异常预警 + 随访话术草稿 | 话术标注「草稿·需医师确认」 |
 
 四条红线（**内核强制**，不依赖模型自觉）：
 
 | id | kind | 作用 |
 |---|---|---|
-| `no-cross-patient-intake` / `no-cross-patient-compare` | `tool-arg-require` | 缺 `patientId` 的落盘/对比 → PreToolUse 阻断 |
+| `no-cross-patient-intake` / `no-cross-patient-compare` / `no-cross-patient-diagnosis` | `tool-arg-require` | 缺 `patientId` 的落盘/对比/辨证 → PreToolUse 阻断 |
 | `ten-questions-complete` | `completeness` | 主诉 / 现病史缺任一项 → PostToolUse 拒绝该结果 |
 | `no-efficacy-conclusion` | `output-forbid` | 结论性疗效表述 → `warn`（提示 + 审计，**不替换正文**） |
 
@@ -128,11 +129,15 @@ Dify 用 `sys.dialogue_count`（会话轮次）猜「第几诊」会错位（会
 |---|---|
 | **必填（2）** | `zhushu` 主诉 · `xianbingshi` 现病史 |
 | **可选（8）** | `jiwangshi` 既往史 · `jiazushi` 家族史 · `guominshi` 过敏史 · `liuxingbingshi` 流行病史 · `tigejiancha` 体格检查 · `shexiang` 舌象 · `maixiang` 脉象 · `suifang` 随访 |
+| **辨证（4，医师手填）** | `bingming` 病名 · `zheng` 证候 · `zhifa` 治法 · `fangyao` 方药 |
 
 - 原十问（寒热 / 汗 / 头身 / 二便 / 饮食 / 胸腹 / 口渴 / 旧病）是**采集清单**，
   现改为**门诊病历结构**；舌象/脉象此前无处可放，现在单独留字段；
 - 「重大疾病诊断原样保留、绝不概括」这条硬规则由 `xianbingshi` 承担（原 `zhenduan` 字段并入）；
 - 字段全集与中文标签的唯一定义处：`layer/packs/tcm/pack.mjs` 的 `ALL_FIELDS` + `FIELD_CN`。
+- **辨证侧独立于症状侧**：病名/证候/治法/方药是**医师的判断**，由 `diagnosis_record` 原样落盘、
+  **绝不经过模型提取**（否则就是「系统自动辨证」）；不进四态对比、不进「上次病历」注入块。
+  唯一定义处：`DIAGNOSIS_FIELDS` + `DIAGNOSIS_CN`。
 
 ## 六、两条不可退让的契约（踩过坑才定下的）
 

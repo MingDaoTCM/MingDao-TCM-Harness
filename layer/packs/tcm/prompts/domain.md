@@ -51,6 +51,14 @@
 jiwangshi 既往史 · jiazushi 家族史 · guominshi 过敏史 · liuxingbingshi 流行病史 ·
 tigejiancha 体格检查 · shexiang 舌象 · maixiang 脉象 · suifang 随访
 
+**辨证侧（病名/证候/治法/方药）—— 只由医师填写，你**不得**提取或生成：**
+
+`bingming` 病名 · `zheng` 证候 · `zhifa` 治法 · `fangyao` 方药
+
+> 辨证是**执业医师的判断**，走 `diagnosis_record` 工具由医师原样落盘。你在 intake_collect
+> 里**绝不要**自行推断证型、给出治法或方药 —— 那正是「给出辨证结论 / 开方」这条红线禁止的。
+> 你只做症状侧（主诉/现病史/四诊）的采集，辨证留给医师。
+
 **重大疾病必须原样保留**：对话里出现的任何疾病诊断（尤其癌症、肿瘤、糖尿病、心脏病等）
 必须**原样**写进 `xianbingshi`（或 `zhushu`），绝不允许过滤、省略或概括成"慢性病"。
 既往确诊同样是事实，一样原样记录。

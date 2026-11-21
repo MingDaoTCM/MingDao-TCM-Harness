@@ -82,7 +82,7 @@ MINGDAO_HOME=~/.mingdao-tcm node src/cli.js web 3821
 
 ## 与上游的版本关系
 
-- 本层当前对齐 **MingDao-Harness v0.8.1**（`engines.mingdao: ">=0.5 <0.9"`，兼容窗口已覆盖）；
+- 本层当前对齐 **MingDao-Harness v0.10.1**（`engines.mingdao: ">=0.5 <0.9"`，兼容窗口已覆盖）；
   > 这个版本号不是装饰：`tools/doc-lint.mjs` 的 INV-6 会拿它跟**实际内核版本**比，
   > 落后了就红 —— 提醒你「自那以后本层没有重新验证过」。内核升版本后跑一遍 `npm test` 再改这个数。
   > （2026-10-09 就是这么发现的：当天先是内核到 v0.8.1、README 还写 0.6.10，门禁变红；
