@@ -69,6 +69,12 @@ for (const g of list) {
     // 重试通过 → 记为「flaky 通过」并**大声打印**，同时把首次失败的完整输出写到
     // gate-flaky/<id>.log（CI 上传为 artifact），下次能直接看到是哪条测试不稳。
     const firstOut = out;
+    // 无论重试结果如何，**先把首次失败输出落盘** —— 否则"重试也失败"时
+    // artifact 里什么都没有 ✗（v0.1.43 第五轮就吃了这个亏：artifact 是空的）。
+    try {
+      fs.mkdirSync(path.join(REPO, 'gate-flaky'), { recursive: true });
+      fs.writeFileSync(path.join(REPO, 'gate-flaky', `${g.id}.log`), firstOut);
+    } catch { /* 忽略 */ }
     r = runOnce();
     out = `${r.stdout || ''}${r.stderr || ''}`;
     if (r.status === 0) {
