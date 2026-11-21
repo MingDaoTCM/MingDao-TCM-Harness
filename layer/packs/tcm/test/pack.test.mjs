@@ -636,7 +636,7 @@ test('withRegistryLock：陈旧锁（超 staleMs）被强拆并成功接管', ()
   const lockPath = `${registryFile(home)}.lock`;
   // 预置一把"进程崩了留下的"陈旧锁：mtime 改到 20 秒前
   fs.writeFileSync(lockPath, '999\n');
-  const old = new Date(Date.now() - 20000);
+  const old = new Date(Date.now() - 60000);   // 2026-11-21：余量从 10s 加到 50s（慢 runner/时钟粒度）
   fs.utimesSync(lockPath, old, old);
   let ran = false;
   withRegistryLock(home, () => { ran = true; }, { staleMs: 10000, timeoutMs: 2000 });
@@ -661,7 +661,7 @@ await testAsync('withRegistryLockAsync：跨 await 持锁且正确释放', async
   const home = mkLockHome();
   const lockPath = `${registryFile(home)}.lock`;
   const r = await withRegistryLockAsync(home, async () => {
-    await new Promise((res) => setTimeout(res, 20));
+    await new Promise((res) => setTimeout(res, 50));   // 慢 runner 上 20ms 太贴近调度粒度
     return 'async-ok';
   });
   assert.equal(r, 'async-ok');
@@ -675,7 +675,7 @@ test('★ withRegistryLock：锁被占且未超 stale 时，超时抛错（不�
   const lockPath = `${registryFile(home)}.lock`;
   fs.writeFileSync(lockPath, '999\n');          // 占住锁，mtime=now，不会超 stale 被强拆
   assert.throws(
-    () => withRegistryLock(home, () => {}, { staleMs: 10000, timeoutMs: 60 }),
+    () => withRegistryLock(home, () => {}, { staleMs: 10000, timeoutMs: 300 }),   // 2026-11-21：60ms 在慢 CI runner 上过紧（v0.1.43 连红三轮），放宽到 300ms
     /等待注册表锁超时/,
     '锁被占且未超 stale 时应超时报错，而不是绕过锁执行 fn',
   );
