@@ -62,7 +62,13 @@ for (const g of list) {
     console.log(`  ✓ ${g.name}  [${g.id}]${line ? '  ' + line : ''}`);
   } else {
     failed += 1;
-    const why = out.trim().split('\n').filter(Boolean).slice(-4).join('\n      ') || `exit ${r.status}`;
+    // 修（2026-11-21）：原来只取**最后 4 行** ✗ —— 失败测试的 `✗ 名字` 往往在更前面，
+    // 于是 CI 红了却看不到"到底哪条测试挂了" ✗（v0.1.43 就是这样：只知道 64 通过 1 失败，
+    // 不知道是哪一条）。现在**优先把带 ✗ 的行全部带上**，再补末尾几行上下文。
+    const lines = out.trim().split('\n').filter(Boolean);
+    const badLines = lines.filter((l) => l.includes('✗'));
+    const picked = [...new Set([...badLines, ...lines.slice(-4)])].slice(-12);
+    const why = picked.join('\n      ') || `exit ${r.status}`;
     failures.push(`${g.id}：${why}`);
     console.log(`  ✗ ${g.name}  [${g.id}]\n      ${why}`);
   }
